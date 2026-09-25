@@ -65,7 +65,7 @@ void EventManager::setPublisher(Publisher publisher) {
  * @param[in] detail 선택적인 상세 메시지 또는 증거 이미지 경로.
  * @note 여러 스레드에서 호출되어도 JSON 한 줄이 서로 섞이지 않도록 출력 mutex를 잡는다.
  */
-bool EventManager::publish(const std::string_view event_type,
+void EventManager::publish(const std::string_view event_type,
                            const std::string_view slot_id,
                            const std::string_view car_number,
                            const std::string_view occurred_at,
@@ -96,10 +96,8 @@ bool EventManager::publish(const std::string_view event_type,
         publisher = publisher_;
     }
     if (publisher) {
-        return publisher(event_type, session_id, slot_id, car_number,
-                         occurred_at, detail);
+        publisher(event_type, session_id, slot_id, car_number, occurred_at, detail);
     }
-    return false;
 }
 
 }  // namespace parking_timer

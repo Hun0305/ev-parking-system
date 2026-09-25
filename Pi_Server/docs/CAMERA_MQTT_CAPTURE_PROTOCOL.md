@@ -103,11 +103,10 @@ IVA_EV01_ROI_HEIGHT
 | T0 | OCCUPIED 세션 및 촬영 예약 생성 |
 | T0+30초 | `HALL_OCCUPIED_30S` 촬영 요청 |
 | T0+60초 | `HALL_OCCUPIED_60S` 촬영 요청 |
-| T0+장기점유 기준시간 | 차량이 남아 있으면 `OVERTIME_VIOLATION` 촬영 요청 및 위반 처리 |
-| 장기점유 기준시간 이전 VACANT | 대기 요청·OCR 취소, 세션 사진 및 IMAGE_LOG 삭제 |
+| T0+3600초 | 차량이 남아 있으면 `OVERTIME_VIOLATION` 촬영 요청 및 위반 처리 |
+| T0+3600초 이전 VACANT | 대기 요청·OCR 취소, 세션 사진 및 IMAGE_LOG 삭제 |
 
-기준시간은 `SYSTEM_SETTINGS.overstay_threshold_seconds`에서 조회하며 기본값은 3600초다.
-`점유시간 < 기준시간`은 조기 출차, `점유시간 >= 기준시간`은 위반으로 처리한다.
+`점유시간 < 3600초`는 조기 출차, `점유시간 >= 3600초`는 위반으로 처리한다.
 
 ## 5. MQTT 요청 규약 제안
 
@@ -200,12 +199,12 @@ Camera full Snapshot
 
 ```text
 data/snapshots/ch1/EV01/
-├── occupied_30s/
-│   ├── original/..._HALL_30S_original.jpg
-│   └── enhanced/..._HALL_30S_enhanced.jpg
-└── occupied_60s/
-    ├── original/..._HALL_60S_original.jpg
-    └── enhanced/..._HALL_60S_enhanced.jpg
+├── scene/
+│   ├── ..._HALL_30S.jpg
+│   └── ..._HALL_60S.jpg
+└── enhanced/
+    ├── ..._HALL_30S_enhanced.png
+    └── ..._HALL_60S_enhanced.png
 ```
 
 `IMAGE_LOG.enhancement_type` 제안:

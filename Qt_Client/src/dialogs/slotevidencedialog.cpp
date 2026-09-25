@@ -14,21 +14,15 @@
 SlotEvidenceDialog::SlotEvidenceDialog(const QString &slotId, SlotState state,
                                        const QString &plateNumber,
                                        const QList<ParkingImageResource> &images,
-                                       ImageLoader *imageLoader,
-                                       OcrStatus ocrStatus, QWidget *parent)
+                                       ImageLoader *imageLoader, QWidget *parent)
     : QDialog(parent)
 {
     setAttribute(Qt::WA_DeleteOnClose);
     setWindowTitle(QStringLiteral("%1 image evidence").arg(slotId));
     resize(1040, 720);
     auto *rootLayout = new QVBoxLayout(this);
-    
-    QString ocrText;
-    if (ocrStatus == OcrStatus::Requested) ocrText = QStringLiteral(" [OCR...]");
-    else if (ocrStatus == OcrStatus::Unrecognized) ocrText = QStringLiteral(" [OCR FAIL]");
-
-    auto *summary = new QLabel(QStringLiteral("%1 | %2 | Plate: %3%4")
-                                   .arg(slotId, slotStateText(state), plateNumber, ocrText), this);
+    auto *summary = new QLabel(QStringLiteral("%1 | %2 | Plate: %3")
+                                   .arg(slotId, slotStateText(state), plateNumber), this);
     summary->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 700;"));
     rootLayout->addWidget(summary);
 

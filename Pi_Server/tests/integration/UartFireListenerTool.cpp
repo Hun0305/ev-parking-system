@@ -1,8 +1,7 @@
 // STM32 UART 통신만 단독으로 확인하기 위한 경량 실행 파일.
-// 카메라/MQTT/DB 없이 운영 서버와 같은 device::SensorLinkManager로
-// SENSOR:/FIRE: 프레임을 받아 파싱하고 콘솔에 찍어준다.
-#include "device/SensorLinkManager.hpp"
-#include "sensor/SensorProtocolParser.hpp"
+// 카메라/MQTT/DB 없이 SensorLinkManager 로 들어오는 SENSOR:/FIRE: 프레임을
+// 파싱해서 콘솔에 그대로 찍어준다.
+#include "sensor/SensorLinkManager.hpp"
 #include "util/Logger.hpp"
 
 #include <atomic>
@@ -12,7 +11,6 @@
 #include <sstream>
 #include <string>
 #include <thread>
-#include <utility>
 
 namespace {
 
@@ -45,62 +43,41 @@ int main() {
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
 
-    device::SensorLinkManager::Config link_config;
-    link_config.mode = device::SensorLinkMode::UartLine;
-    link_config.uart.device_path = getEnvOr(
-        "SENSOR_UART_DEVICE", getEnvOr("FIRE_UART_DEVICE", "/dev/ttyAMA0"));
-    link_config.uart.baud_rate = getEnvIntOr(
-        "SENSOR_UART_BAUD", getEnvIntOr("FIRE_UART_BAUD", 115200));
-    link_config.uart.read_timeout_ms =
-        getEnvIntOr("SENSOR_UART_READ_TIMEOUT_MS", 250);
-    link_config.reconnect_delay_ms = getEnvIntOr(
-        "SENSOR_UART_RECONNECT_MS",
-        getEnvIntOr("FIRE_UART_REOPEN_DELAY_MS", 2000));
+    sensor::SensorLinkConfig link_config;
+    link_config.devicePath = getEnvOr("FIRE_UART_DEVICE", "/dev/ttyAMA0");
+    link_config.baudRate = getEnvIntOr("FIRE_UART_BAUD", 115200);
+    link_config.reopenDelayMs =
+        getEnvIntOr("FIRE_UART_REOPEN_DELAY_MS", 2000);
 
     util::logInfo("uart-fire-listener started");
-    util::logInfo("device=" + link_config.uart.device_path +
-                   " baud=" + std::to_string(link_config.uart.baud_rate));
+    util::logInfo("device=" + link_config.devicePath +
+                   " baud=" + std::to_string(link_config.baudRate));
 
-    const sensor::SensorProtocolParser parser;
-    device::SensorLinkManager sensor_link(
-        std::move(link_config),
-        [&parser](const std::string& line, const std::string& transport) {
-            std::string error;
-            const auto received_at = std::chrono::system_clock::now();
-            if (sensor::SensorProtocolParser::isFireLine(line)) {
-                auto message = parser.parseFire(line, received_at, &error);
-                if (!message) {
-                    util::logWarn("fire line rejected: " + error + " | " + line);
-                    return;
-                }
-                message->transport = transport;
-                message->raw = line;
-                std::ostringstream oss;
-                oss << "sensor=" << message->sensorId
-                    << " state=" << sensor::toString(message->state)
-                    << " sequence="
-                    << (message->sequence ? std::to_string(*message->sequence)
-                                          : "-")
-                    << " transport=" << transport << " raw=" << message->raw;
-                util::logLine("FIRE", oss.str());
-                return;
-            }
+    sensor::SensorLinkManager sensor_link(link_config, g_running);
 
-            auto message = parser.parse(line, received_at, &error);
-            if (!message) {
-                util::logWarn("parking line rejected: " + error + " | " + line);
-                return;
-            }
+    sensor_link.setFireHandler(
+        [](const sensor::FireSensorMessage& message) {
+            std::ostringstream oss;
+            oss << "sensor=" << message.sensorId
+                << " state=" << sensor::toString(message.state)
+                << " sequence="
+                << (message.sequence ? std::to_string(*message.sequence)
+                                      : "-")
+                << " raw=" << message.raw;
+            util::logLine("FIRE", oss.str());
+        });
+
+    sensor_link.setParkingHandler(
+        [](const sensor::SensorProtocolMessage& message) {
             const char* state_name =
-                message->state == parking::ParkingSensorState::Occupied
+                message.state == parking::ParkingSensorState::Occupied
                     ? "OCCUPIED"
                     : "VACANT";
             std::ostringstream oss;
-            oss << "sensor=" << message->sensorId << " state=" << state_name
+            oss << "sensor=" << message.sensorId << " state=" << state_name
                 << " sequence="
-                << (message->sequence ? std::to_string(*message->sequence)
-                                      : "-")
-                << " transport=" << transport;
+                << (message.sequence ? std::to_string(*message.sequence)
+                                      : "-");
             util::logLine("PARKING", oss.str());
         });
 

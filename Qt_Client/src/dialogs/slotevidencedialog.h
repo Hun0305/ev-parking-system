@@ -18,7 +18,6 @@ public:
                                 const QString &plateNumber,
                                 const QList<ParkingImageResource> &images,
                                 ImageLoader *imageLoader,
-                                OcrStatus ocrStatus = OcrStatus::None,
                                 QWidget *parent = nullptr);
 };
 

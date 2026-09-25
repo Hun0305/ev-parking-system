@@ -33,12 +33,6 @@ typedef struct DbImageRow {
     char evidence_reason[DB_TEXT_SMALL];
     char ocr_result[DB_TEXT_SMALL];
     char captured_at[DB_TEXT_SMALL];
-    int has_applied_roi;
-    double roi_x;
-    double roi_y;
-    double roi_width;
-    double roi_height;
-    unsigned long long roi_revision;
 } DbImageRow;
 
 typedef int (*DbParkingSlotVisitor)(const DbParkingSlotRow *row, void *context);
@@ -50,7 +44,7 @@ int db_open(const char *path);
 void db_close(void);
 /* 번호판으로 등록 차량 ID와 전기차 여부를 조회한다. */
 int db_get_vehicle_by_plate(const char *plate_number, int *vehicle_id,
-                            int *is_ev);
+                            int *is_ev, int *is_phev);
 /* 지정 주차면의 VACANT/OCCUPIED/ERROR 상태를 변경한다. */
 int db_update_slot_status(const char *slot_id, const char *status);
 /* 입차 세션을 만들고 생성된 session_id를 호출자에게 돌려준다. */
@@ -62,11 +56,6 @@ int db_end_parking_session(int session_id);
 int db_insert_image_log(int session_id, const char *original_path,
                         const char *enhanced_path, const char *enhancement_type,
                         const char *ocr_result);
-int db_insert_image_log_with_roi(
-    int session_id, const char *original_path, const char *enhanced_path,
-    const char *enhancement_type, const char *ocr_result,
-    double roi_x, double roi_y, double roi_width, double roi_height,
-    unsigned long long roi_revision);
 /* 카메라·센서·주차 상태 이벤트를 EVENT_LOG에 기록한다. */
 int db_insert_event_log(int session_id, const char *slot_id,
                         const char *event_type, const char *message);

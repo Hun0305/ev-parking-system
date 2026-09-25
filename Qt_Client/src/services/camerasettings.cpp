@@ -17,56 +17,12 @@ CameraSettings::CameraSettings(QString configPath)
 
 QString CameraSettings::cameraIp() const
 {
-    if (m_runtimeCredentialsConfigured) return m_runtimeCameraIp;
-    const QString environmentIp = qEnvironmentVariable("HANWHA_CAMERA_IP").trimmed();
-    if (!environmentIp.isEmpty()) {
-        return environmentIp;
-    }
     QSettings settings(m_configPath, QSettings::IniFormat);
     return settings.value(QStringLiteral("camera/camera_ip")).toString();
 }
 
-QString CameraSettings::cameraUsername() const
-{
-    if (m_runtimeCredentialsConfigured) return m_runtimeCameraUsername;
-    const QString environmentUsername = qEnvironmentVariable(
-        "HANWHA_CAMERA_USERNAME");
-    if (!environmentUsername.isEmpty()) {
-        return environmentUsername;
-    }
-    QSettings settings(m_configPath, QSettings::IniFormat);
-    return settings.value(QStringLiteral("camera/username")).toString();
-}
-
-QString CameraSettings::cameraPassword() const
-{
-    if (m_runtimeCredentialsConfigured) return m_runtimeCameraPassword;
-    const QString environmentPassword = qEnvironmentVariable(
-        "HANWHA_CAMERA_PASSWORD");
-    if (!environmentPassword.isEmpty()) {
-        return environmentPassword;
-    }
-    QSettings settings(m_configPath, QSettings::IniFormat);
-    return settings.value(QStringLiteral("camera/password")).toString();
-}
-
-QString CameraSettings::httpsCertificateSha256() const
-{
-    const QString environmentFingerprint = qEnvironmentVariable(
-        "HANWHA_HTTPS_CERT_SHA256");
-    if (!environmentFingerprint.isEmpty()) {
-        return environmentFingerprint;
-    }
-    QSettings settings(m_configPath, QSettings::IniFormat);
-    return settings.value(
-        QStringLiteral("camera/https_certificate_sha256")).toString();
-}
-
-bool CameraSettings::saveCameraCredentials(const QString &cameraIpText,
-                                           const QString &usernameText,
-                                           const QString &passwordText,
-                                           QString &newIp,
-                                           QString &errorMessage)
+bool CameraSettings::saveCameraIp(const QString &cameraIpText, QString &newIp,
+                                  QString &errorMessage) const
 {
     static const QRegularExpression dottedDecimal(
         QStringLiteral(R"(^(?:0|[1-9][0-9]{0,2})(?:\.(?:0|[1-9][0-9]{0,2})){3}$)"));
@@ -81,52 +37,9 @@ bool CameraSettings::saveCameraCredentials(const QString &cameraIpText,
         return false;
     }
 
-    const QString username = usernameText.trimmed();
-    if (username.isEmpty()) {
-        errorMessage = QStringLiteral("Enter the camera username.");
-        return false;
-    }
-    if (passwordText.isEmpty()) {
-        errorMessage = QStringLiteral("Enter the camera password.");
-        return false;
-    }
-
     newIp = address.toString();
     QSettings settings(m_configPath, QSettings::IniFormat);
     settings.setValue(QStringLiteral("camera/camera_ip"), newIp);
-    settings.setValue(QStringLiteral("camera/username"), username);
-    settings.setValue(QStringLiteral("camera/password"), passwordText);
-    settings.sync();
-    if (settings.status() != QSettings::NoError) {
-        errorMessage = QStringLiteral("Failed to save local camera settings.");
-        return false;
-    }
-    m_runtimeCredentialsConfigured = true;
-    m_runtimeCameraIp = newIp;
-    m_runtimeCameraUsername = username;
-    m_runtimeCameraPassword = passwordText;
-    return true;
-}
-
-bool CameraSettings::saveCameraIp(const QString &cameraIpText, QString &newIp,
-                                  QString &errorMessage)
-{
-    const QString username = cameraUsername();
-    const QString password = cameraPassword();
-    if (username.isEmpty() || password.isEmpty()) {
-        errorMessage = QStringLiteral(
-            "Camera username and password must be configured before saving the IP.");
-        return false;
-    }
-    return saveCameraCredentials(cameraIpText, username, password, newIp,
-                                 errorMessage);
-}
-
-bool CameraSettings::saveHttpsCertificateSha256(const QString &sha256,
-                                                QString &errorMessage) const
-{
-    QSettings settings(m_configPath, QSettings::IniFormat);
-    settings.setValue(QStringLiteral("camera/https_certificate_sha256"), sha256);
     settings.sync();
     if (settings.status() != QSettings::NoError) {
         errorMessage = QStringLiteral("Failed to save camera_config.ini.");
@@ -138,22 +51,20 @@ bool CameraSettings::saveHttpsCertificateSha256(const QString &sha256,
 QStringList CameraSettings::rtspUrls(const QString &profileOverride) const
 {
     QStringList urls(4);
-    if (!m_runtimeCredentialsConfigured) {
-        const QString commonUrl = qEnvironmentVariable("RTSP_URL", qEnvironmentVariable("HANWHA_RTSP_URL"));
-        const QString highUrl = qEnvironmentVariable("RTSP_HIGH_URL");
-        const QString lowUrl = qEnvironmentVariable("RTSP_LOW_URL");
-        const QStringList channelEnvNames = {QStringLiteral("RTSP_CH1_URL"), QStringLiteral("RTSP_CH2_URL"),
-                                             QStringLiteral("RTSP_CH3_URL"), QStringLiteral("RTSP_CH4_URL")};
-        for (int i = 0; i < channelEnvNames.size(); ++i) {
-            QString url = qEnvironmentVariable(channelEnvNames.at(i).toUtf8().constData());
-            if (url.isEmpty() && i == 0) url = highUrl;
-            if (url.isEmpty() && i == 1) url = lowUrl;
-            if (url.isEmpty()) url = commonUrl;
-            urls[i] = url;
-        }
-        if (std::any_of(urls.cbegin(), urls.cend(), [](const QString &url) { return !url.isEmpty(); })) {
-            return urls;
-        }
+    const QString commonUrl = qEnvironmentVariable("RTSP_URL", qEnvironmentVariable("HANWHA_RTSP_URL"));
+    const QString highUrl = qEnvironmentVariable("RTSP_HIGH_URL");
+    const QString lowUrl = qEnvironmentVariable("RTSP_LOW_URL");
+    const QStringList channelEnvNames = {QStringLiteral("RTSP_CH1_URL"), QStringLiteral("RTSP_CH2_URL"),
+                                         QStringLiteral("RTSP_CH3_URL"), QStringLiteral("RTSP_CH4_URL")};
+    for (int i = 0; i < channelEnvNames.size(); ++i) {
+        QString url = qEnvironmentVariable(channelEnvNames.at(i).toUtf8().constData());
+        if (url.isEmpty() && i == 0) url = highUrl;
+        if (url.isEmpty() && i == 1) url = lowUrl;
+        if (url.isEmpty()) url = commonUrl;
+        urls[i] = url;
+    }
+    if (std::any_of(urls.cbegin(), urls.cend(), [](const QString &url) { return !url.isEmpty(); })) {
+        return urls;
     }
 
     const QString exampleConfig = QDir(QFileInfo(m_configPath).absolutePath())
@@ -166,9 +77,9 @@ QStringList CameraSettings::rtspUrls(const QString &profileOverride) const
         return urls;
     }
 
-    const QString cameraIpValue = cameraIp();
-    const QString user = cameraUsername();
-    const QString password = cameraPassword();
+    const QString cameraIpValue = settings.value(QStringLiteral("camera/camera_ip")).toString();
+    const QString user = settings.value(QStringLiteral("camera/username")).toString();
+    const QString password = settings.value(QStringLiteral("camera/password")).toString();
     const int port = settings.value(QStringLiteral("camera/rtsp_port"), 554).toInt();
     QString defaultProfile;
     if (profileOverride == QStringLiteral("profile2")) {

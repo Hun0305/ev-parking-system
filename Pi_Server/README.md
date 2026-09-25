@@ -1,43 +1,42 @@
 # VEDA Smart Parking Pi Server
 
 Hanwha Vision CCTV 기반 스마트 주차 관제 시스템의 Raspberry Pi C++ 서버입니다.
-MQTT, 선택적 RTSP, Camera Snapshot API, OpenCV, Gemini OCR, SQLite 및
-Qt 연동 API를 사용합니다.
+RTSP, MQTT, OpenCV, Gemini OCR, SQLite 및 Qt 조회 API를 사용합니다.
 
 ## 현재 구현
 
-- Camera Snapshot API original/enhanced JPEG 수신(현재 기본 촬영 경로)
-- Snapshot API 비활성/실패 시 선택적 RTSP 최신 프레임 수신
+- 카메라 RTSP 영상 수신
 - MQTT 및 ONVIF Metadata 이벤트 수신
-- 주차면용 기존 BestShot은 `BESTSHOT_ENABLED=true`일 때만 다운로드
-- CH2 Plate BestShot 중복 억제, Python EV 아이콘 판정, Gemini OCR 및 차량 DB 확정
+- 차량·번호판 BestShot 다운로드
 - IVA Snapshot과 OpenCV 전처리 이미지 저장
 - Gemini HTTPS 번호판 OCR
 - 로컬 DB 기반 EV / NON_EV / UNKNOWN 판별
 - SQLite 주차 세션·이미지·이벤트 저장
 - Qt용 HTTP/HTTPS 상태·이미지 조회 API
-- 개발용 홀센서 MQTT 및 STM32 UART 입력과 Snapshot·세션·타이머 연결
-- OCCUPIED 확정 유예시간과 T0+30초/60초 요청형 촬영·OCR scheduler
+- 가짜 홀센서 MQTT 입력과 실제 Snapshot·세션·타이머 연결
+- OCCUPIED 확정 유예시간과 T0+30초/60초 RTSP ROI 촬영·OCR scheduler
 - CV5 Snapshot OpenAPI의 동일 프레임 original/enhanced 다운로드 및 OCR 연결
 - 실제 UART line 및 UART 기반 LoRa CRC frame 수신 드라이버
 - 프로젝트 전용 Linux Character Device `/dev/parking_alert`
 - Qt용 주차 상태/위반 MQTT 이벤트 발행
 - 1시간 이전 출차 시 임시 이미지와 IMAGE_LOG 정리
 
+아직 STM32·LoRa 실물 검증, 32면 최종 모델, 화재 처리 및 영상 클립 저장은
+구현되지 않았습니다.
 - 센서 메시지 파서와 주차 상태 단위 테스트
-- STM32 UART 화재 후보 수신, Qt MQTT OPEN/ACKNOWLEDGED/RESOLVED 전이
+- STM32 UART 화재 후보 수신 및 Qt MQTT 알림 (초안)
 
-현재 운영 프로필은 WiseAI IVA MQTT를 점유 입력으로 사용하고,
-Snapshot API에서 받은 이미지를 Pi에서 ROI crop해 OCR한다. 32면 최종
-모델, LoRa 실물 구간과 3~5초 영상 클립 저장은 아직 완료되지 않았다.
+아직 32면 최종 모델, LoRa 및 영상 클립 저장은 구현되지 않았습니다.
+STM32 실장비는 아직 연결되어 있지 않아 화재 경로는 FIFO 시뮬레이터로만
+검증했습니다.
 
 ## 주요 흐름
 
 ```text
 Camera
-→ WiseAI MQTT + CV Snapshot API (BestShot/RTSP는 선택 기능)
+→ RTSP / MQTT / BestShot / CV Snapshot OpenAPI
 → Raspberry Pi C++ Server
-→ 카메라 내부 CV 개선본 다운로드 + 슬롯 ROI crop
+→ 카메라 내부 CV 개선본 다운로드 (기본 비활성, CAP 설치 후 활성)
 → Gemini OCR
 → SQLite 및 이미지 파일 저장
 → Qt HTTP/HTTPS 조회
@@ -49,36 +48,18 @@ MQTT 메시지로 동일한 센서 업무 흐름을 검증합니다.
 ```text
 SENSOR:HALL01:OCCUPIED:1
 → 설정된 유예시간 동안 VACANT 없이 유지되면 OCCUPIED 확정
-→ EV01 세션 시작 Snapshot 저장
+→ EV01 최신 ROI Snapshot 저장
 → T0+30초 카메라 original/enhanced 촬영 및 첫 Gemini OCR
 → 실패 시 T0+60초 동일 방식으로 Gemini OCR 재시도
-→ EV이면 동일 SQLite session_id로 장기 점유 타이머 등록
+→ EV/PHEV이면 동일 SQLite session_id로 장기 점유 타이머 등록
 → 제한시간 초과 시 최신 Snapshot 추가 저장
 → parking/v1/events/EV01 및 parking/v1/state/EV01 MQTT 알림
 → Qt가 session_images_url을 HTTP로 조회
 ```
 
-번호판 OCR이 EV로 확인되면 같은 `PARKING_SESSION.session_id`를 장기 점유
+번호판 OCR이 EV/PHEV로 확인되면 같은 `PARKING_SESSION.session_id`를 장기 점유
 타이머에 등록합니다. 별도의 세션을 다시 만들지 않으며, 서버 재시작 시 활성 세션도
 남은 시간을 기준으로 복구합니다. 독립 실행형 `parking-timer` 역시 계속 빌드됩니다.
-
-카메라 WiseAI와 Hall 센서를 서로 보완하는 운영 모드는 다음과 같습니다. 기본값은
-기존 홀센서 호환을 위한 `HALL`이고, 현재 운영 설정은 `HYBRID_OR`입니다.
-
-```bash
-export PARKING_OCCUPANCY_SOURCE=HYBRID_OR
-export PARKING_OCCUPANCY_CONFIRM_MS=5000
-export CAMERA_IVA_EXIT_CONFIRM_MS=10000
-```
-
-`HYBRID_OR`에서는 IVA INTRUSION 또는 5초 유지된 Hall OCCUPIED 중 먼저 확정된
-입력이 세션 하나를 만들고, 나중 입력은 같은 `session_id`의 센서 확인 상태만
-보강합니다. 출차는 해당 세션을 실제 확인한 센서만 판단에 참여하며, 두 센서가
-모두 확인한 세션은 둘 다 VACANT일 때 종료합니다. IVA EXIT는 10초 동안 후속
-INTRUSION을 기다립니다. 조기 출차는 이미지와 `IMAGE_LOG`를 삭제하고,
-`violation_at`이 있는 위반 세션은 증거를 보존합니다. `HALL`과 `CAMERA_IVA`
-단독 모드도 호환을 위해 유지합니다. 자세한 Publication 계약은
-[`docs/IVA_VEHICLE_DETECTION.md`](docs/IVA_VEHICLE_DETECTION.md)에 있습니다.
 
 ## 빌드 및 테스트
 
@@ -93,8 +74,8 @@ ctest --test-dir cmake-build --output-on-failure
 
 ## 실행
 
-`.env.public`과 `.env.private`를 읽고 STM32 UART 자동 탐색을 적용해 실행합니다.
-실행할 때마다 변경된 소스만 증분 빌드한 후 서버를 시작합니다.
+현재 로컬 카메라·Gemini 설정과 STM32 UART 자동 탐색을 적용해 실행합니다.
+`.env.fire.local`이 있으면 화재·홀센서 시험 설정도 함께 적용합니다.
 
 ```bash
 ./run_server.sh
@@ -106,45 +87,19 @@ ctest --test-dir cmake-build --output-on-failure
 ./run_server.sh restart
 ```
 
-### 설정 파일 (EVDA-203)
-
-설정은 두 파일로 나뉩니다.
-
-| 파일 | 내용 | Git |
-|---|---|---|
-| `.env.public` | 민감정보가 없는 전체 설정 | 커밋함 |
-| `.env.private` | 실제 계정·키만 | `.gitignore` |
-
-`.env.private`에 들어가는 값은 다음이 전부입니다.
+비밀정보는 다음 로컬 파일에서 관리하며 Git에 커밋하지 않습니다.
 
 ```text
-GEMINI_API_KEY
-CAMERA_RTSP            # URL에 카메라 계정·비밀번호가 포함됨
-CAMERA_API_USERNAME
-CAMERA_API_PASSWORD
-CAMERA_OPEN_API_BASE   # 카메라 실제 주소
-CAMERA_IMAGE_BASE      # 카메라 실제 주소
-TELEGRAM_BOT_TOKEN
-TELEGRAM_CHANNEL
+.env.camera.local
+.env.iva.local
+.env.gemini.local
 ```
-
-`.env.private.example`을 복사해서 시작하면 됩니다.
-
-```bash
-cp .env.private.example .env.private
-```
-
-**새로 클론했다면** `.env.private`를 직접 만들고 팀에서 공유받은 값을 채워야
-합니다. 없으면 서버는 뜨지만 OCR과 카메라 접속이 동작하지 않습니다
-(`run_server.sh`가 경고를 출력합니다).
-
-설정을 바꿀 때는 `.env.public`을 고쳐서 커밋하십시오. 이 파일이 Git으로 함께
-배포되므로 팀원이 `git pull`만 하면 같은 설정으로 맞춰집니다.
 
 ```bash
 set -a
-source ./.env.public
-[ -f ./.env.private ] && source ./.env.private
+source ./.env.camera.local
+[ -f ./.env.iva.local ] && source ./.env.iva.local
+source ./.env.gemini.local
 set +a
 
 ./cmake-build/pi-server
@@ -154,56 +109,30 @@ set +a
 
 ```bash
 export PARKING_TIMER_ENABLED=true
-export PARKING_OVERSTAY_THRESHOLD_SECONDS=3600
+export PARKING_TIMEOUT_SECONDS=3600
+export PARKING_OVERSTAY_EVIDENCE_DELAY_SECONDS=3600
 export PARKING_HALL_WORK_QUEUE_CAPACITY=100
-export PARKING_OCCUPANCY_CONFIRM_MS=5000
+export PARKING_OCCUPANCY_CONFIRM_MS=10000
 export CAPTURE_SCHED_ENABLED=true
 export HALL_CAPTURE_OCR_ENABLED=true
 # 실기기 반복 시험에서만 예: export CAPTURE_OFFSETS_SEC=5,10
 ```
 
-확정된 입차는 Camera Snapshot API가 활성화된 경우 카메라의 original/enhanced를
-현재 슬롯 ROI로 잘라 `OCCUPANCY_START_EVIDENCE`로 한 번 저장한다. 세션이 계속 활성 상태이면 T0 기준
-`overstay_threshold_seconds` 뒤에 `OVERSTAY_EVIDENCE`를 한 번 더 저장하고 같은
-시점에 장기 점유 위반을 판정한다. 값은 SQLite `SYSTEM_SETTINGS`에 저장되며 Qt가
-`GET/PUT /api/v1/settings/overstay-threshold`로 60~86400초 범위에서 변경한다.
-변경값은 활성 세션과 이후 신규 세션 모두에 원래 입차시각 T0 기준으로 적용된다.
-Snapshot API가 비활성이면 기존 RTSP FrameBuffer ROI를 사용한다.
+확정된 입차는 최신 RTSP FrameBuffer의 ROI를
+`OCCUPANCY_START_EVIDENCE`로 한 번 저장한다. 세션이 계속 활성 상태이면 T0 기준
+`PARKING_OVERSTAY_EVIDENCE_DELAY_SECONDS` 뒤에 `OVERSTAY_EVIDENCE`를 한 번 더
+저장한다. 테스트에서는 이 값을 5~10초로 낮출 수 있다.
 
 재시작 시 활성 세션의 원래 T0를 기준으로 아직 없는 증거 작업을 복원한다. 조기 출차는
 대기 중인 Job을 즉시 제거하며, 홀센서 비동기 큐는 같은 슬롯의 최신 상태를 병합하고
 서로 다른 슬롯이 설정 용량을 넘을 때 `HALL_WORK_QUEUE_OVERFLOW`를 기록한다.
 
-`CAMERA_SNAPSHOT_API_ENABLED=true`이면 시작·장기점유 증거와 30/60초 scheduler는
-CV5 카메라의
+`CAMERA_SNAPSHOT_API_ENABLED=true`이면 촬영 scheduler는 CV5 카메라의
 `/images/generate`를 호출하고 같은 프레임의 original/enhanced JPEG를 즉시 내려받아
-실행 중 슬롯 ROI로 동일하게 crop한 뒤 파일·IMAGE_LOG·Gemini OCR로 연결한다. 개선본이 제공되므로 Hall OCR에서는 Pi의
+파일·IMAGE_LOG·Gemini OCR로 연결한다. 개선본이 제공되므로 Hall OCR에서는 Pi의
 OpenCV 화질 개선을 실행하지 않는다. API가 비활성이면 기존 RTSP FrameBuffer 촬영을
-유지한다. `CAMERA_SNAPSHOT_API_RTSP_FALLBACK=false`이면 API 모드에서 Pi는 RTSP
-수신기와 최초 프레임 대기를 시작하지 않는다. ROI 웹 도구에서 저장한 좌표는 실행 중인
-서버에 즉시 반영되어 다음 촬영부터 적용된다. 상세 설정과 실기기 검증 절차는
+유지한다. 상세 설정과 실기기 검증 절차는
 [`docs/CAMERA_SNAPSHOT_API_INTEGRATION.md`](docs/CAMERA_SNAPSHOT_API_INTEGRATION.md)에 있다.
-
-RTSP metadata의 기존 주차면 Vehicle/Plate BestShot 경로는
-`BESTSHOT_ENABLED=true`일 때만 처리한다. 기본값은 `false`이며, IVA + Snapshot API
-운영에서는 중복 세션·이미지 경로를 막기 위해 비활성화한다. Metadata 수신기는 아래
-입구 전용 경로가 활성화된 경우에도 시작한다.
-
-입구 전용 `ENTRANCE_ENABLED=true`이면 카메라의 실제 RTSP metadata `ch02`에서
-Plate 이미지만 임시 저장한다. Plate 이미지는 EV 아이콘 worker에서 먼저 판정한 뒤
-Gemini OCR에 한 번 전달된다. 다른 ObjectId로 반복된 근접 이미지는 짧은 pHash
-창에서 제거한다. Python 의존성은 다음처럼 설치한다.
-
-```bash
-sudo apt install -y python3-opencv python3-numpy
-```
-
-아이콘 판정과 번호판 OCR이 모두 성공하면 `VEHICLE(plate_number,is_ev)`를 생성하거나
-갱신하고 `ENTRANCE_RECOGNITION`에 연결한다. 정상 판정 이미지는 삭제하되 번호판,
-신뢰도, EV 여부와 차량 ID는 DB에 남긴다. 주차면 OCR은 최근 입구 번호판과 보수적으로
-비교해 입구 결과를 우선 사용하며, 주차면 OCR 원문도 별도 컬럼에 보존한다. `REVIEW`
-또는 OCR 실패는 차량으로 확정하지 않는다. 상세 구조는
-[`docs/architecture/ENTRANCE_BESTSHOT_PIPELINE.md`](docs/architecture/ENTRANCE_BESTSHOT_PIPELINE.md)에 있다.
 
 가짜 홀센서 입력:
 
@@ -248,31 +177,28 @@ ABI, 권한 설정, `read/write/ioctl/poll` 검증 방법은
 [`docs/PARKING_ALERT_DRIVER.md`](docs/PARKING_ALERT_DRIVER.md)를 참고하십시오.
 ### 화재 알림 (STM32 UART)
 
-코드 기본값은 비활성이며, 현재 운영 `.env.public`은
-`FIRE_ALARM_ENABLED=true`다. 다음 환경변수로 제어한다.
+기본값은 비활성이며, 다음 환경변수로 켭니다.
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `FIRE_ALARM_ENABLED` | `false` | 화재 경로 전체 on/off |
-| `SENSOR_UART_DEVICE` | `/dev/ttyAMA0` | 화재/홀센서가 공유하는 STM32 UART 장치 |
-| `SENSOR_UART_BAUD` | `115200` | 9600/19200/38400/57600/115200 |
-| `SENSOR_UART_RECONNECT_MS` | `1000` | UART 재연결 대기 |
+| `FIRE_UART_DEVICE` | `/dev/ttyAMA0` | STM32 UART 장치. 테스트 시 FIFO 경로 |
+| `FIRE_UART_BAUD` | `115200` | 9600/19200/38400/57600/115200 |
 | `FIRE_TOPIC_PREFIX` | `parking/fire` | 화재 최신 상태 토픽 접두사 |
 | `FIRE_SENSOR_CHANNEL_MAP` | (없음) | `FLAME01=ch01,FLAME02=ch02,...` |
 
 STM32가 아직 연결되지 않은 동안에는 FIFO로 같은 수신 경로를 검증할 수 있습니다.
 
 ```bash
-tools/fire/fake_fire_sensor.sh --create-fifo /tmp/fake-uart
+tools/fake_fire_sensor.sh --create-fifo /tmp/fake-uart
 
 FIRE_ALARM_ENABLED=true \
-SENSOR_LINK_MODE=uart-line \
-SENSOR_UART_DEVICE=/tmp/fake-uart \
+FIRE_UART_DEVICE=/tmp/fake-uart \
 FIRE_SENSOR_CHANNEL_MAP='FLAME01=ch01,FLAME02=ch02,FLAME03=ch03,FLAME04=ch04' \
   ./cmake-build/pi-server
 
 # 다른 터미널에서
-tools/fire/fake_fire_sensor.sh /tmp/fake-uart FLAME01 detected
+tools/fake_fire_sensor.sh /tmp/fake-uart FLAME01 detected
 mosquitto_sub -h localhost -t 'parking/fire/#' -v
 ```
 
@@ -287,19 +213,12 @@ data/
 │   └── plate/
 │       └── enhanced/
 ├── snapshots/
-│   └── ch1/
-│       └── EV01~EV04/
-│           ├── occupancy_start/
-│           ├── occupied_30s/
-│           ├── occupied_60s/
-│           └── overstay/
+│   └── ch1/EV01~EV04/
 └── db/
     └── parking.db
 ```
 
-슬롯별 네 단계 디렉터리는 미리 생성해 둔다. 세션 구분은 파일명의
-`session_<id>`와 `IMAGE_LOG.session_id`로 유지한다. `violation_at`이 없는 조기 출차는
-해당 세션의 파일과 `IMAGE_LOG`를 삭제하고, 위반 세션의 증거는 보존한다.
+`snapshots/ch1/EV01~EV04` 아래에는 슬롯마다 `scene/`, `enhanced/`가 생성됩니다.
 
 SQLite 주요 테이블:
 
@@ -308,43 +227,18 @@ SQLite 주요 테이블:
 - `PARKING_SESSION`
 - `IMAGE_LOG`
 - `EVENT_LOG`
-- `ENTRANCE_RECOGNITION`
-- `app_users`
-- `app_sessions`
 
 ## Qt 조회 API
 
-운영 주소 예:
+기본 주소:
 
 ```text
-https://<PI_HOST>:8080
-```
-
-원격 listener는 기본적으로 TLS 인증서와 key가 없으면 시작하지 않는다. 초기 앱
-계정은 seed에 없으며 다음 명령에서 비밀번호를 TTY로 두 번 입력해 생성한다.
-
-시연 장비에서 사용할 자체 서명 인증서는 다음 명령으로 생성한다. 생성된 private
-key와 인증서는 `data/tls/`에 저장되고 Git에 포함되지 않는다.
-
-```bash
-./tools/setup_tls.sh 172.20.32.97
-```
-
-기본 공개 설정은 생성 경로인 `data/tls/server.crt`, `data/tls/server.key`를
-참조하므로 생성 후 서버를 재시작한다. 다른 경로를 사용할 때만 `.env.private`로
-두 경로를 덮어쓴다. Qt/Windows에는 `data/tls/server.crt`를 신뢰 인증서로
-등록하며 인증서 오류 무시는 사용하지 않는다.
-
-```bash
-./cmake-build/app-user --db data/db/parking.db \
-  add operator --display-name "Parking Operator"
+http://<PI_IP>:8080
 ```
 
 | Method | 경로 | 설명 |
 |---|---|---|
-| GET | `/api/v1/health` | 공개 서버 상태 |
-| POST | `/api/v1/auth/login` | 공개 앱 로그인 |
-| POST | `/api/v1/auth/logout` | 현재 Bearer 세션 폐기 |
+| GET | `/api/v1/health` | 서버 상태 |
 | GET | `/api/v1/parking-slots` | 전체 주차면 |
 | GET | `/api/v1/parking-slots/{slot_id}` | 특정 주차면 |
 | GET | `/api/v1/parking-sessions/active` | 활성 세션 |
@@ -352,27 +246,21 @@ key와 인증서는 `data/tls/`에 저장되고 Git에 포함되지 않는다.
 | GET | `/api/v1/images/{id}/original` | 원본 이미지 |
 | GET | `/api/v1/images/{id}/enhanced` | 전처리 이미지 |
 
-health와 login을 제외한 API에는 `Authorization: Bearer <accessToken>`이 필요하다.
-Qt는 이미지 목록에서 받은 상대 URL에 같은 Pi HTTPS origin을 붙여 사진을
-요청한다. 전체 계약과 Windows CA 설치 방법은
-[`docs/HTTP_API.md`](docs/HTTP_API.md)에 있다.
+Qt는 이미지 목록에서 받은 상대 URL에 Pi 서버 주소를 붙여 사진을 요청합니다.
 
 ## 현재 제한
 
 - DB는 최종 목표인 4채널 32면 구조가 아닙니다.
-- 주차면용 BestShot은 비활성이며 입구 CH2용 metadata 경로만 활성화한다.
-- EV 아이콘 모델은 실제 CH2 Plate 이미지로 오탐·미탐 정확도를 별도 검증한다.
+- BestShot 저장 경로는 아직 채널별 P1~P4로 분리되지 않았습니다.
 - UART/LoRa 소프트웨어 계층은 구현됐지만 실제 STM32·LoRa 장비 검증은 남아 있습니다.
 - 알람 ACK와 STM32 부저/LED 출력은 아직 없습니다.
 - `/dev/parking_alert`는 구현됐지만 타이머 위반 callback과 32면 bit 매핑은 아직 연결 전입니다.
+- API 사용자 인증은 아직 없습니다.
 
 상세 문서:
 
 - [`docs/CAMERA_MQTT_CAPTURE_PROTOCOL.md`](docs/CAMERA_MQTT_CAPTURE_PROTOCOL.md): 카메라 MQTT 촬영 요청 목표 규약과 ROI 처리
 - [`docs/CAMERA_SNAPSHOT_API_INTEGRATION.md`](docs/CAMERA_SNAPSHOT_API_INTEGRATION.md): CV5 카메라 내부 화질 개선 이미지 연동
-- [`docs/HARDWARE_E2E_TEST_GUIDE.md`](docs/HARDWARE_E2E_TEST_GUIDE.md): WiseAI IVA부터 MQTT·촬영·ROI·DB·Qt·출차까지 실기기 E2E 검증
-- [`docs/SENSOR_LINK_HARDWARE_TEST.md`](docs/SENSOR_LINK_HARDWARE_TEST.md): 실제 STM32 Hall/Flame UART·LoRa 반자동 HIL 승인 테스트
-- [`docs/Pi_Server_Hardware_E2E_Test_Guide.pdf`](docs/Pi_Server_Hardware_E2E_Test_Guide.pdf): 실기기 E2E 테스트 배포·인쇄용 PDF
 - [`docs/GEMINI_OCR_GUIDE.md`](docs/GEMINI_OCR_GUIDE.md): OpenCV 전처리, Gemini HTTPS OCR, DB 반영과 수동 테스트
 - [`docs/UART_LORA_PROTOCOL.md`](docs/UART_LORA_PROTOCOL.md): STM32 UART 및 LoRa frame 규약
 - [`docs/PARKING_ALERT_DRIVER.md`](docs/PARKING_ALERT_DRIVER.md): 전용 Linux Character Device 빌드·ABI·검증

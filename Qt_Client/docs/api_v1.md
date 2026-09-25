@@ -9,11 +9,9 @@ Qt Client가 Raspberry Pi 서버에서 주차 상태와 증거 이미지를 조�
 ```ini
 [api]
 enabled=true
-base_url=http://<raspberry-pi-ip>:8080
+base_url=http://172.20.35.167:8080
 slots_path=/api/v1/parking-slots
 slot_detail_path=/api/v1/parking-slots/{slot_id}
-parking_roi_list_path=/api/v1/settings/parking-slots/roi
-parking_roi_path=/api/v1/settings/parking-slots/{slot_id}/roi
 timeout_ms=5000
 reconnect_interval_ms=5000
 max_reconnect_interval_ms=60000
@@ -30,39 +28,6 @@ Settings 화면에서 서버 주소를 저장하면 로컬 오버라이드 파�
 | GET | `/api/v1/parking-slots` | 전체 주차면과 활성 세션 요약 |
 | GET | `/api/v1/parking-slots/{slotId}` | 선택한 주차면의 세션과 이미지 목록 |
 | GET | `/api/v1/images/{imageId}` | 차량·번호판 증거 이미지 |
-| GET | `/api/v1/settings/overstay-threshold` | 장기 점유 판정 기준 조회 |
-| PUT | `/api/v1/settings/overstay-threshold` | 장기 점유 판정 기준 변경 |
-| GET | `/api/v1/settings/parking-slots/roi` | EV01~EV04 및 P01~P04 ROI 전체 조회 |
-| GET | `/api/v1/settings/parking-slots/{slotId}/roi` | 선택 슬롯 ROI 조회 |
-| PUT | `/api/v1/settings/parking-slots/{slotId}/roi` | 정규화 ROI 저장 및 즉시 적용 |
-
-### Overstay threshold
-
-Settings 화면은 시간·분·초 입력을 총 초로 변환하여 PUT하고,
-성공 응답 후 GET으로 서버에 실제 저장된 값을 다시 확인합니다.
-
-```json
-{"thresholdSeconds": 1800}
-```
-
-`thresholdSeconds`의 허용 범위는 60~86400이며, `applyPolicy`는 서버가
-반환한 값을 UI에 표시합니다.
-
-### Parking ROI API
-
-독립 `Parking ROI` 탭은 제거되었고, Qt Client는 IVA Setup의
-`Save Crop ROI to Pi` 흐름에서 다음 정규화 좌표만 PUT합니다.
-
-Parking Map의 IVA 매핑에 따라 EV 슬롯은 `EV01`~`EV04`, 일반 슬롯은
-`P01`~`P04` 경로로 저장합니다.
-
-```json
-{"x":0.371528,"y":0.298026,"width":0.113426,"height":0.275658}
-```
-
-PUT 성공 후 같은 슬롯을 GET으로 다시 조회해 SQLite에 저장된 서버 좌표를 화면에
-반영합니다. 네트워크·HTTP·JSON 오류가 발생하면 마지막으로 성공한 서버 ROI를
-유지합니다.
 
 ## 응답 필드
 
