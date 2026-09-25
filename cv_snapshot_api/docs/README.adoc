@@ -1,0 +1,606 @@
+= cv_snapshot_api 개발 및 빌드 가이드
+:toc:
+:toclevels: 3
+
+== 프로젝트 역할
+
+`cv_snapshot_api`만 실제 개발 및 CAP 생성 대상이다. 아래 두 폴더는 코드와 산출물을
+포함해 절대 수정하지 않는 읽기 전용 레퍼런스다.
+
+* `../snapshot_jpeg`
+* `../display_image_opencv`
+
+상세 작업 규칙은 link:../../AGENTS.md[SDK 작업 지침]을 따른다. 외부 서버 전달용 운영 API
+문서는 link:server-api-integration.md[CV Snapshot API 서버 연동 가이드]를 사용한다.
+현재 기준선과 검증 상태는 link:../RELEASE_NOTES.md[0.1.0 릴리즈 노트], 구성요소 책임은
+link:system-architecture.md[시스템 역할 경계], 최신 CAP·카메라 확인 항목은
+link:verification-plan.md[0.1.0 검증 계획]을 사용한다.
+== SampleComponent 소스 구조
+
+[source,text]
+----
+app/src/sample_component/
+├── sample_component.cc          SDK 생명주기, event 분배, OpenAPI routing
+├── sample_component_network.cc  서버 시작, HTTP parse, response와 client 종료
+├── sample_component_image.cc    snapshot, OpenCV orchestration과 결과 저장
+├── sample_component_log.cc      로그 조회·삭제 OpenAPI와 입력 검증
+├── sample_component_images.cc   동일 프레임 이미지 세트 API와 run cache
+├── environment_processor.cc     환경 분석, 자동 처리와 지정 필터 실행
+├── frame_processor.cc           순수 OpenCV decode, blur, Canny, encode
+└── file_logger.cc               stderr/file trace와 로그 회전
+----
+
+`SampleComponent` class와 `sample_component.h`는 그대로 유지하고 멤버 함수 정의만 역할별
+translation unit으로 나눈다. 기존 외부 API와 포트 변경 요청의 HTTP 409 정책은 유지하고,
+4채널 선택을 위한 Attribute와 진단 API만 확장한다.
+
+== 구현된 외부 API
+
+[source,text]
+----
+POST /opensdk/{app_id}/startserver
+GET  http://{camera-ip}:{port}/image/jpg?channel=0
+----
+
+단계별 진단을 위해 사용자가 승인한 테스트 전용 API도 제공한다.
+
+[source,text]
+----
+GET  /opensdk/{app_id}/channels
+POST /opensdk/{app_id}/capture  body: {"channel":0}
+POST /opensdk/{app_id}/process  body: {"channel":0}
+GET  /opensdk/{app_id}/filters
+POST /opensdk/{app_id}/images/generate
+GET  /opensdk/{app_id}/environment/catalog
+POST /opensdk/{app_id}/environment/analyze
+GET  /opensdk/{app_id}/logs?file=current&lines=200
+POST /opensdk/{app_id}/logs/clear
+----
+
+`capture`는 snapshot과 파일 생성 확인 후 원본 JPEG를 반환한다. `process`는 기존
+캡처 파일만 OpenCV 처리하고 `../res/processed_chN.jpg`에 저장한 뒤 처리 JPEG를 반환한다.
+두 API는 기존 외부 API를 대체하지 않는다. 실제 경로는 persisted Attribute가 있으면
+기본값과 달라질 수 있다.
+
+`startserver`의 JSON은 레퍼런스와 같이 `app_id`, `port`를 받는다. 포트는
+1024~65535 범위이며 최초 시작 요청 이후 다른 포트로 바꾸려면 현재 구현에서는 앱을
+재시작해야 한다.
+
+`GET /image/jpg`는 최근 처리 JPEG가 cache TTL 안에 있으면 그것을 즉시 반환한다. TTL이
+만료된 경우에만 현재 프레임을 캡처하고 grayscale, GaussianBlur(3x3), Canny(100, 200)를
+적용한다. 처리·cache·OpenCV 스레드 설정과 HTTP 429 정책은
+link:resource-control.md[리소스 제어 안내]를 따른다.
+
+이 소스 폴더는 `cv_snapshot_api_release`의 별도 `refector` 복사본이며, AppName은 기존
+`cv_snapshot_api`를 유지하고 AppVersion만 `1.1`로 올렸다. 따라서 동일 카메라에 설치하면
+기존 앱을 대체한다. 두 버전을 병렬 설치하는 용도가 아니다.
+
+=== 동일 프레임 운영 이미지 세트
+
+실제 서버가 원본, 자동 개선본과 지정 필터 결과를 비교할 때는 먼저 Start Server를 실행하고
+다음 OpenAPI를 호출한다.
+
+[source,text]
+----
+GET  /opensdk/{app_id}/filters
+POST /opensdk/{app_id}/images/generate
+GET  http://{camera-ip}:{port}/images/result/jpg?run_id={run_id}&result={id}
+----
+
+`GET /filters`는 직접 요청 가능한 5개 필터 ID와 대응 환경을 반환한다. 기본 생성 요청은
+같은 프레임의 `original`, `enhanced(auto)` 두 장을 만든다.
+
+[source,json]
+----
+{"channel":0}
+----
+
+특정 필터도 같은 프레임에 적용하려면 `outputs`를 지정한다. ID는 한 요청 안에서 고유해야 하며
+영문자, 숫자, `_`, `-`만 허용한다. 한 요청은 최대 7개 결과를 생성한다.
+
+[source,json]
+----
+{
+  "channel": 0,
+  "outputs": [
+    {"id":"original","type":"original"},
+    {"id":"enhanced","type":"auto"},
+    {"id":"low_light","type":"filter","filter":"fast_bilateral"},
+    {"id":"contrast","type":"filter","filter":"stretch_1_99"}
+  ]
+}
+----
+
+응답은 `run_id`, `detected_environment`, `auto_filter`와 각 결과의 `id`, `type`,
+`applied_filter`, `processing_ms`, `jpeg_bytes`, `image_path`를 포함한다. 이미지 자체는 별도
+포트에서 `image/jpeg`로 조회한다. 결과는 메모리에 최근 8개 run만 보관하며 그보다 오래된
+run은 HTTP 404 `IMAGE_RUN_NOT_FOUND`가 된다. 앱 재시작 시 모든 run이 삭제된다.
+
+환경 분석의 기본 경로는 `POST /environment/analyze`, 결과 경로는
+`GET /environment/result/jpg`다. 기존 `/environment/test`, `/environment/jpg`와
+`test_mode/all_selected`는 호환 별칭으로 유지하고 새 요청은 `mode/compare`를 사용한다.
+
+== 포함된 CV5 OpenCV
+
+[source,text]
+----
+app/3rd_party/include/opencv2/
+app/3rd_party/lib/libopencv_core.so*
+app/3rd_party/lib/libopencv_imgproc.so*
+app/3rd_party/lib/libopencv_imgcodecs.so*
+----
+
+현재 포함 파일은 OpenCV 4.11.0, ELF64 little-endian AArch64용이며 CV5 SDK의
+`cortex-a76-2022.08-gcc12.1-linux5.15` 경로에 있는 toolchain으로 빌드했다. 실제
+Docker 컴파일러 보고 버전은 GCC 9.4.0이다. Windows x64
+`build/` 산출물은 사용하지 않는다.
+
+이미 `app/3rd_party`가 있는 다른 SDK 환경에 적용할 때는 폴더 전체를 먼저 덮어쓰지
+않는다. 그 환경의 기존 header/library, OpenCV 버전, AArch64 여부와 toolchain을
+확인한 뒤 기존 구조를 기준으로 필요한 파일과 CMake 경로만 병합한다.
+
+== OpenCV를 다시 빌드해야 하는 경우
+
+일반 앱 빌드에는 이미 포함된 `app/3rd_party`를 사용하므로 OpenCV 재빌드가 필요 없다.
+재빌드가 필요하면 OpenCV 4.11.0 소스를 아래에 둔다.
+
+[source,text]
+----
+cv_snapshot_api/opencv/sources/CMakeLists.txt
+cv_snapshot_api/opencv/cv5-toolchain.cmake
+cv_snapshot_api/scripts/build-opencv-cv5.sh
+----
+
+VirtualBox 공유 폴더에서는 symbolic link 생성이 실패할 수 있으므로 스크립트는
+빌드와 install을 컨테이너 로컬 `/tmp`에서 수행하고, 최종 `.so`를 `cp -L` 방식으로
+프로젝트에 복사한다. Docker 컨테이너 내부에서 실행한다.
+
+[source,bash]
+----
+cd /opt/cv_snapshot_api
+bash scripts/build-opencv-cv5.sh --project-root /opt/cv_snapshot_api
+----
+
+== Docker 빌드 및 CAP 생성
+
+이 명령은 Docker 컨테이너 안에서 입력하는 명령이 아니다. VirtualBox Linux 호스트의
+`cv_snapshot_api/docker-compose.yml`이 있는 폴더에서 실행한다.
+
+[source,bash]
+----
+cd /media/sf_shared_vision/OpenSdk/cv_snapshot_api
+APP_NAME=cv_snapshot_api \
+SDK_VER=26.05.19 \
+SOC=cv5 \
+docker compose up
+----
+
+`docker-compose.yml`은 `/opt/cv_snapshot_api/app`에서 CMake configure, build, install을
+수행한 후 `/opt/cv_snapshot_api`에서 `opensdk_packager -s cv5`를 실행한다. 성공 시 호스트
+공유 폴더의 `cv_snapshot_api.cap` 수정 시간과 packager 성공 로그를 반드시 확인한다.
+기존 `cv_snapshot_api.cap`이 있더라도 새 빌드 성공 전에는 이번 구현 산출물로 간주하지
+않는다.
+
+== API 테스트
+
+카메라에 새 CAP를 설치하고 앱을 실행한 뒤 다음 순서로 확인한다.
+
+[source,bash]
+----
+curl -i -X POST \
+  "http://CAMERA_IP/opensdk/APP_ID/startserver" \
+  -H "Content-Type: application/json" \
+  -d '{"app_id":"APP_ID","port":"8080"}'
+
+curl -v \
+  "http://CAMERA_IP:8080/image/jpg" \
+  --output processed-current-frame.jpg
+
+file processed-current-frame.jpg
+----
+
+테스트 웹에서는 아래 순서로 각 구간을 따로 확인한다.
+
+. `Start Server`: AppNetworkManager 포트 서버 시작
+. `Capture Frame`: OpenPlatform snapshot, `capture.jpg` 생성 및 원본 이미지 표시
+. `Process Image`: 저장된 JPEG의 OpenCV decode, Canny, encode, `processed.jpg` 저장 및 표시
+. `Full API Test`: 별도 포트의 `GET /image/jpg` 전체 흐름 확인
+
+각 버튼 오른쪽에는 실제 Method, endpoint, 요청 body와 응답 형식을 표시한다. APP_ID와
+카메라 host는 현재 테스트 페이지 URL에서 가져오고, 포트 입력값을 변경하면
+`startserver` body와 Full API 주소가 즉시 갱신된다.
+
+각 웹 요청은 10초 후 `REQUEST_TIMEOUT`으로 표시되어 화면이 무한 로딩 상태로 남지
+않는다. 이는 브라우저 대기만 중단하며 C++의 동기 `SendReplyEventWait()` 자체를
+취소하지는 않는다. 이미지 서버는 현재 HTTP이므로 테스트 페이지가 HTTPS로 열리면
+브라우저 mixed-content 정책 때문에 Full API 요청이 차단될 수 있다.
+
+분리 API를 curl로 확인하려면 다음처럼 실행한다.
+
+[source,bash]
+----
+curl -i -X POST "http://CAMERA_IP/opensdk/APP_ID/capture"
+curl -X POST "http://CAMERA_IP/opensdk/APP_ID/process" \
+  --output processed-existing-frame.jpg
+----
+
+== 문서
+
+* link:implementation-plan.adoc[구현 계획 및 상태]
+* link:development-log.adoc[단계별 개발 이력]
+* link:reference-baseline.sha256[레퍼런스 무변경 기준]
+== 런타임 단계별 로그
+
+원격 `DebugLog`를 사용하지 않고 공통 `Trace()`에서 `stderr`와 로컬 파일에 동시에
+출력한다. stderr는 즉시 flush하고 파일 로그도 각 줄을 기록한 뒤 flush한다. 로그
+prefix는 다음 형식이다.
+
+[source,text]
+----
+[cv_snapshot_api][INFO][INIT] component initialization started
+[cv_snapshot_api][INFO][APP_INFO] application ID received
+[cv_snapshot_api][INFO][SERVER] TCP server start requested port=8080
+[cv_snapshot_api][INFO][CLIENT] connected client_id=1
+[cv_snapshot_api][INFO][HTTP] request client_id=1 method=GET path=/image/jpg
+[cv_snapshot_api][INFO][IMAGE] request started client_id=1
+[cv_snapshot_api][INFO][SNAPSHOT] capture requested path=../res/capture_chN.jpg
+[cv_snapshot_api][INFO][SNAPSHOT] capture completed path=../res/capture_chN.jpg
+[cv_snapshot_api][INFO][OPENCV] processing started client_id=1 mode=canny blur=3 canny=100:200 quality=90
+[cv_snapshot_api][INFO][OPENCV] processing completed client_id=1 jpeg_bytes=12345
+[cv_snapshot_api][INFO][HTTP] response client_id=1 status=200 content_type=image/jpeg body_bytes=12345
+[cv_snapshot_api][INFO][CLIENT] close requested client_id=1
+----
+
+오류는 `[ERROR]` level로 출력한다. JPEG binary, 전체 HTTP header와 전체 요청 body는
+로그에 기록하지 않는다. CAP 설치 후 카메라가 앱 표준 오류를 수집하는 로그 화면 또는
+콘솔에서 위 prefix를 검색한다.
+
+파일 로그 기본 경로와 회전 정책은 다음과 같다.
+
+[source,text]
+----
+../res/log/cv_snapshot_api.log      현재 로그, 최대 1 MiB
+../res/log/cv_snapshot_api.log.1    최근 백업
+../res/log/cv_snapshot_api.log.2
+../res/log/cv_snapshot_api.log.3    가장 오래된 백업
+----
+
+예상 카메라 절대 경로는
+`/mnt/opensdk/apps/cv_snapshot_api/app/res/log/cv_snapshot_api.log`다. `log` 디렉터리가 없으면
+0755 권한으로 생성한다. 파일 생성·회전·기록이 실패해도 API와 카메라 처리는 계속되고
+stderr 출력은 유지된다. 확인 명령은 다음과 같다.
+
+[source,bash]
+----
+cd /mnt/opensdk/apps/cv_snapshot_api/app/res/log
+ls -lh
+tail -f cv_snapshot_api.log
+----
+
+현재 `res` 경로는 진단 단계의 사용자 결정이다. CAP 재설치 시 로그가 유지된다고
+보장하지 않으므로 운영 단계에서는 `../storage/log` 전환을 다시 검토한다.
+== `res` 캡처 경로 쓰기 조건 실험
+
+현재 기본 snapshot 경로는 사용자 결정에 따라 다음으로 설정했다.
+
+[source,text]
+----
+../res/capture_chN.jpg
+----
+
+목적은 설치된 카메라 앱에서 OpenPlatform의 `eAppSnapshotJpeg`가 `res` 경로에 쓰기를
+허용하는지 확인하는 것이다. `Request Image` 호출 전에는 파일이 없어도 정상이다.
+호출 후 `[SNAPSHOT] capture requested` 다음에 `capture completed`가 나오고 OpenCV 처리와
+HTTP 200까지 이어지면 쓰기가 허용된 것이다. `capture failed`가 나오면 `res` 쓰기
+제한 또는 실행 기준 경로 문제일 수 있다.
+
+기존 카메라 storage에 이전 Attribute가 유지되면 기본값을 덮어쓸 수 있으므로 실제
+사용 경로는 `[SNAPSHOT] capture requested path=...` 로그로 확인한다. 실험 종료 후
+운영 기본 경로는 writable 영역인 `../storage/cv_snapshot_api_snapshot.jpg`로 복귀 여부를
+결정한다.
+== HTTP 진단 응답
+
+카메라 런타임 로그를 볼 수 없는 환경을 위해 오류 응답을 JSON으로 반환한다.
+
+[source,json]
+----
+{
+  "success": false,
+  "http_status": 502,
+  "stage": "snapshot",
+  "error_code": "SNAPSHOT_FAILED",
+  "message": "camera snapshot JPEG request failed"
+}
+----
+
+주요 오류 매핑은 다음과 같다.
+
+[cols="1,2,3"]
+|===
+|HTTP |error_code |stage
+
+|400 |`BAD_REQUEST_LINE` |`http`
+|404 |`PATH_NOT_FOUND` |`http` 또는 `open_api`
+|405 |`METHOD_NOT_ALLOWED` |`http` 또는 `open_api`
+|409 |`SERVER_ALREADY_CONFIGURED` |`server`
+|431 |`HEADER_TOO_LARGE` |`http`
+|503 |`APP_ID_NOT_READY` |`app_info`
+|503 |`PROCESSING_BUSY` |`image`
+|502 |`SNAPSHOT_FAILED` |`snapshot`
+|500 |`CAPTURE_FILE_EMPTY` |`snapshot`
+|500 |`PROCESSED_FILE_WRITE_FAILED` |`opencv`
+|500 |`IMAGE_DECODE_FAILED` |`opencv`
+|500 |`INVALID_PROCESSING_OPTIONS` |`opencv`
+|500 |`UNSUPPORTED_PROCESSING_MODE` |`opencv`
+|500 |`JPEG_ENCODE_FAILED` |`opencv`
+|500 |`OPENCV_FAILED` 또는 `PROCESSING_FAILED` |`opencv`
+|===
+
+테스트 웹의 Request Image는 `fetch()`로 응답 상태와 JSON을 읽는다. 실패 시 HTTP,
+stage, error_code와 message를 화면에 표시하고, 성공한 `image/jpeg`만 Blob URL로
+변환해 `<img>`에 표시한다. 서버 포트에 연결 자체가 불가능한 경우에는
+`NETWORK_ERROR`를 표시한다.
+== Full API `REQUEST_TIMEOUT` 판정
+
+`signal is aborted without reason`는 카메라가 반환한 오류 본문이 아니라 테스트 웹의
+10초 `AbortController`가 fetch를 중단하면서 발생한 브라우저 메시지다. 즉 지정 포트의
+`GET /image/jpg`가 10초 내 완전한 HTTP 응답을 반환하지 않았다.
+
+새 CAP 설치 후 다음과 같이 판정한다.
+
+* `Capture Frame`도 timeout: `SendReplyEventWait(eAppSnapshotJpeg)` 또는 그 이전 이벤트
+  전달 구간을 우선 확인한다.
+* Capture는 성공하지만 `Process Image`가 실패: 캡처 파일 decode, OpenCV 또는 결과
+  파일 저장 문제다.
+* Capture와 Process는 성공하지만 Full API만 timeout: AppNetworkManager의
+  `eServerData`, client ID, HTTP parse 또는 send/close 구간 문제다.
+* `curl --max-time 5 http://CAMERA_IP:PORT/not-found`도 timeout: snapshot에 들어가기 전
+  NetworkManager 수신 구간 문제일 가능성이 높다.
+* `/not-found`는 404이고 `/image/jpg`만 timeout: 전체 흐름의 snapshot 동기 호출을 우선
+  확인한다.
+== Full API `eClientData` 수신 처리
+
+카메라 runtime에서 Full API 요청 시 `[CLIENT] connected`까지만 출력되고 HTTP data
+로그가 없었던 결과에 따라 `eClientData`와 `eServerData`를 모두 같은
+`HandleNetworkData()`로 전달한다. 새 CAP에서는 다음 순서가 보여야 한다.
+
+[source,text]
+----
+[INFO] [CLIENT] connected client_id=...
+[INFO] [NETWORK] event=eClientData
+[INFO] [HTTP] data received client_id=... chunk_bytes=... buffered_bytes=...
+[INFO] [HTTP] request client_id=... method=GET path=/image/jpg
+----
+
+먼저 영상처리가 없는 작은 응답을 확인한다.
+
+[source,bash]
+----
+curl -v --max-time 5 http://CAMERA_IP:PORT/not-found
+----
+
+즉시 HTTP 404 JSON이 반환되면 client data 수신, HTTP parser와 작은 응답 전송까지
+정상이다. 그 다음 `/image/jpg`를 한 번만 요청해 snapshot, OpenCV, JPEG 전송 순서를
+파일 로그로 확인한다.
+
+== 테스트 웹 로그 조회 및 삭제
+
+테스트 웹은 이미지 단계별 버튼과 함께 앱 파일 로그를 바로 확인한다. 별도 로그 다운로드
+기능은 제공하지 않는다. 조회 자체가 로그를 계속 증가시키지 않도록 성공한 `/logs`
+요청은 파일 로그에 남기지 않는다.
+
+[source,text]
+----
+GET /opensdk/{app_id}/logs?file=current&lines=200
+----
+
+`file`은 `current`, `backup1`, `backup2`, `backup3`만 허용하며 클라이언트가 파일 경로를
+지정할 수 없다. `lines`는 1~500이고 기본값은 200이다. 한 번에 읽는 범위는 파일 끝의
+최대 256 KiB로 제한한다. 응답에는 `content`, `file_size`, `requested_lines`,
+`returned_lines`, `truncated`가 포함된다.
+
+테스트 웹에서 INFO/ERROR level, INIT·SERVER·HTTP·SNAPSHOT·OPENCV 등의 stage와 문자열
+검색은 브라우저에서 적용한다. 로그 내용은 `textContent`로만 표시한다. 자동 새로고침은
+기본 OFF이며 사용자가 켜면 화면이 보이는 동안 5초마다 갱신한다.
+
+삭제 API는 다음 확인 문자열을 요구한다.
+
+[source,json]
+----
+POST /opensdk/{app_id}/logs/clear
+{"scope":"current","confirm":"CLEAR_LOG"}
+{"scope":"all","confirm":"CLEAR_ALL_LOGS"}
+----
+
+`current`는 현재 로그만 비우고 백업을 유지한다. `all`은 현재 로그를 비우고 백업 1~3을
+삭제한다. 웹 버튼은 실행 전에 확인 대화상자를 표시한다. 삭제 성공을 기록하기 위해 현재
+로그에는 `[INFO] [LOG] logs cleared ...` 한 줄이 새로 생성되는 것이 정상이다.
+
+== 묶음 CAP 설치 후 테스트 순서
+
+기능별 CAP를 반복 생성하지 않고 이번 변경을 한 번에 빌드·설치한 뒤 아래 순서로 확인한다.
+
+. Start Server: 같은 포트 최초 202 또는 이미 요청된 경우 200
+. Capture Frame: 원본 JPEG 표시와 `../res/capture_chN.jpg`
+. Process Image: Canny JPEG 표시와 `../res/processed_chN.jpg`
+. Full API Test: 별도 포트 `GET /image/jpg` JPEG 표시
+. 로그 새로고침: 현재 로그와 API 단계 순서 표시
+. level, stage, 검색어 필터
+. 현재 로그 삭제: 백업 유지 및 LOG 한 줄 생성
+. 전체 로그 삭제: 백업 선택 시 404, 현재 로그는 LOG 한 줄 표시
+. 자동 새로고침 ON/OFF: 5초 갱신과 숨겨진 탭 중지
+
+문제가 생기면 실패한 버튼의 화면 `HTTP`, `stage`, `error_code`, `endpoint`와 로그 마지막
+200줄을 기준으로 해당 구간만 수정한다.
+== Workflow 진단 콘솔 UI
+
+테스트 웹은 Postman Collection Runner의 순차 요청, GitHub Actions의 단계 상태, Grafana의
+로그 필터 방식을 참고한 단일 파일 진단 콘솔이다. 외부 JavaScript/CSS framework는
+사용하지 않으며 기존 OpenAPI와 별도 포트 이미지 API를 그대로 호출한다.
+
+상단의 `선택 채널 전체 테스트`은 다음 순서로 한 번에 실행한다.
+
+[source,text]
+----
+Start Server -> Capture Frame -> Process Image -> Full API Test
+----
+
+각 단계는 IDLE, RUNNING, SUCCESS, ERROR, TIMEOUT, STOPPED, SKIPPED 상태와 HTTP 상태,
+응답시간, 응답 크기를 표시한다. 실패 또는 10초 timeout이면 후속 단계는 SKIPPED 처리한다.
+`실행 중지`는 브라우저의 AbortController만 중지하며 카메라 내부의 동기 SDK 요청을
+취소하지 않는다.
+
+단계 행을 선택하면 Request, Response, Error, API Info 탭에서 endpoint, body, 시작 시각,
+HTTP 상태, Content-Type, 응답시간, 크기, stage와 error_code를 볼 수 있다. 이미지 영역은
+Capture, Process, Full 결과와 해상도·크기·응답시간을 표시하고 클릭 확대를 지원한다.
+
+로그 영역에는 기존 파일·줄 수·level·stage·검색 외에 오래된/최신 순 정렬, 줄 바꿈,
+검색어 강조와 선택 행 상세가 추가됐다. 모든 응답과 로그는 text node 또는 `textContent`로
+표시하며 로그 다운로드 기능은 제공하지 않는다.
+
+`결과 초기화`는 브라우저의 단계 결과와 Blob URL을 정리한다. 카메라의 실제 서버를
+중지하지는 않으므로 포트를 바꾸려면 기존 정책대로 앱을 재시작해야 한다.
+=== JPEG FILE 응답 판정과 지원 화면
+
+Capture와 Process는 AppDispatcher의 `OpenAppResponseType::FILE` 응답이므로 JPEG 파일
+본문이어도 HTTP Content-Type이 `application/octet-stream`일 수 있다. 이 두 단계는
+`image/jpeg` 또는 `application/octet-stream`이면서 본문 첫 3 byte가 JPEG SOI
+`FF D8 FF`일 때 성공으로 판정한다. Full API는 component가 직접 HTTP header를 만들기
+때문에 기존대로 `image/jpeg`를 요구한다. Content-Type만 보고 JPEG가 아닌 데이터를
+허용하지 않는다.
+
+이 테스트 콘솔은 PC 브라우저용이다. 모바일 전용 breakpoint와 1열 재배치는 지원하지
+않는다.
+== 4채널 API와 일괄 테스트
+
+화면의 CH 1~4는 SDK 및 API channel 0~3에 대응한다. `channel_count` 기본값은 4,
+`default_channel`은 0이다. 채널을 생략한 기존 요청은 CH 1을 사용한다.
+
+[source,text]
+----
+GET  /opensdk/{app_id}/channels
+POST /opensdk/{app_id}/capture       body: {"channel":0}
+POST /opensdk/{app_id}/process       body: {"channel":0}
+GET  http://{camera-ip}:{port}/image/jpg?channel=0
+----
+
+`/channels`는 `channel_count`, `default_channel`, `channels` 배열을 반환한다. Capture와
+Process body는 선택 사항이며 없으면 기본 채널을 사용한다. 직접 이미지 API는
+`channel` query가 없으면 기본 채널을 사용한다. 숫자가 아니거나 `0~channel_count-1`
+범위를 벗어나면 HTTP 400 `INVALID_CHANNEL`을 반환한다.
+
+채널별 파일은 다음과 같이 분리된다.
+
+[source,text]
+----
+../res/capture_ch0.jpg       ../res/processed_ch0.jpg
+../res/capture_ch1.jpg       ../res/processed_ch1.jpg
+../res/capture_ch2.jpg       ../res/processed_ch2.jpg
+../res/capture_ch3.jpg       ../res/processed_ch3.jpg
+----
+
+PC 웹의 채널 선택으로 한 채널의 Capture, Process, Full을 각각 실행할 수 있다.
+`4채널 빠른 테스트`는 Full API를 채널마다 한 번 실행하고, `4채널 전체 진단`은 Start
+Server 한 번 후 각 채널의 Capture, Process, Full을 실행한다. 사용자 동작은 한 번이지만
+`processing_frame_`과 SDK snapshot 안정성을 위해 네 채널 요청은 병렬이 아닌 순차로
+수행한다. 한 채널의 Capture가 실패하면 해당 Process는 SKIPPED지만 독립적인 Full은 계속
+검사하며 다른 채널도 중단하지 않는다.
+
+일괄 실행은 화면의 channel selector를 반복해서 변경하지 않는다. 각 반복의 channel 값을
+Capture, Process, Full 요청과 결과 이미지 카드에 명시적으로 전달하므로 비동기 응답 시점에도
+다른 채널 카드로 결과가 덮어써지지 않는다.
+
+CLI 빠른 검사는 프로젝트 루트에서 실행한다.
+
+[source,bash]
+----
+bash scripts/test-all-channels.sh \
+  --camera-ip 172.20.35.216 \
+  --app-id APP_ID \
+  --port 8080 \
+  --output-dir test-results
+----
+
+스크립트는 서버 시작 후 channel 0~3을 순차 호출하고 `full_chN.jpg`, 실패 JSON과
+`result.json`을 저장한다. 성공은 HTTP 200과 JPEG SOI `FF D8 FF`를 모두 확인한다.
+
+카메라 검증에서는 CH 1~4의 실제 영상이 서로 다른지 확인해야 한다. 코드와 HTTP 성공만으로
+채널 매핑이 올바르다고 판정하지 않는다. 전체 테스트 후 CPU와 thread가 정상 수준으로
+복귀하는지도 함께 확인한다.
+== Python V1 환경 적용 검증
+
+`환경 적용 검증` 화면은 후보 알고리즘을 재평가하는 기능이 아니다. 읽기 전용 기준인
+`cv_logic_python` V1을 기준으로 이식한 환경 분석과 선정 처리가 CV5에서 실행되는지
+확인한다. 현재 catalog에서는 `fog`와 `motion_blur`를 제거했으므로 기존 68.52% Test
+정확도는 더 이상 유효하지 않으며 재검증 전까지 `explicit` 모드를 우선한다.
+
+OpenAPI는 다음과 같다.
+
+[source,text]
+----
+GET  /opensdk/{app_id}/environment/catalog
+POST /opensdk/{app_id}/environment/test
+----
+
+테스트 요청 예시는 다음과 같다.
+
+[source,json]
+----
+{"channel":0,"test_mode":"auto"}
+{"channel":0,"test_mode":"explicit","environment":"low_contrast"}
+{"channel":0,"test_mode":"all_selected"}
+----
+
+`auto`는 분석 결과 환경의 선정 처리를 적용하고 `explicit`은 지정 환경을 사용한다.
+`all_selected`는 같은 snapshot에 현재 활성 처리 5개를 순차 적용한다. 즉 원본과 함께
+`sensor_noise/bilateral_d5`, `low_contrast/stretch_1_99`,
+`extreme_low_light/fast_bilateral`, `ir_night/bilateral_gamma_clahe`,
+`backlight/backlight_combined` 결과를 반환한다.
+
+응답의 각 결과는 `expected_variant`, `executed_variant`, `mapping_match`, `applied`,
+`processing_ms`, `jpeg_bytes`, `image_path`를 포함한다. 분석 객체에는 기존 지표와 함께
+`p95_luminance`, `dynamic_range`, `edge_density`가 포함된다. 세 값은 화면 중앙 80% ROI를
+3x3 median filter로 정리한 뒤 계산하며, blackout은 평균 밝기 8 미만, shadow 90% 이상,
+P95 20 미만, 동적 범위 18 미만, edge density 0.002 미만을 모두 만족할 때만 확정한다.
+결과 이미지는 Start Server에서 지정한 포트로 조회한다.
+
+[source,text]
+----
+GET http://{camera-ip}:{port}/environment/jpg?run_id={run_id}&result={result_id}
+----
+
+결과 JPEG는 파일로 장기 저장하지 않고 앱 메모리에서 최신 run 한 개만 유지한다. 새 테스트를
+실행하면 이전 run ID는 HTTP 404 `ENVIRONMENT_RUN_NOT_FOUND`가 된다. 기본 Capture/Process의
+`../res/capture_chN.jpg`, `../res/processed_chN.jpg` 저장 정책은 변경하지 않는다.
+
+카메라 확인 순서는 다음과 같다.
+
+. Start Server를 실행하고 선택 포트가 READY인지 확인한다.
+. 환경 적용 검증에서 채널 하나를 선택한다.
+. 먼저 `explicit`로 실제 환경 하나를 지정해 expected/executed와 이미지 변화를 확인한다.
+. `all_selected`로 원본 1장과 선정 처리 5장, 총 6장을 확인한다.
+. `auto`로 detected environment와 분석 지표를 확인하고 재검증 대기 상태를 함께 기록한다.
+. 오른쪽 로그의 ENVIRONMENT stage에서 같은 run ID, 처리시간과 JPEG 크기를 확인한다.
+. 실행이 끝난 뒤 CPU, 메모리와 thread 수가 정상 수준으로 복귀하는지 확인한다.
+
+PC 정적·모의 테스트는 API/UI 연결을 검증한 것이며 CV5 컴파일과 카메라 영상 결과 검증은
+새 CAP를 설치한 뒤 별도로 수행해야 한다.
+== UI 브랜드 테마
+
+테스트 콘솔은 한화 공식 CI의 `Hanwha Orange 100`(`#F37321`)과 검정·백색 중심의 테마를
+사용한다. 오렌지는 주요 실행 버튼, 활성 메뉴, 진행 표시와 focus에 사용하며 성공·오류는
+각각 녹색·빨간색과 상태 문자를 함께 표시한다. 공식 로고 파일이나 CI asset은 번들하지 않는다.
+== 혼합형 데스크톱 화면 구성
+
+화면은 PC 전용 3영역으로 구성한다. 왼쪽 workspace에서 기본 테스트, 환경 적용 검증과
+4채널 진단을 전환하고 중앙에는 선택 기능만 표시한다. 오른쪽 로그 panel은 모든 기능에서
+유지되며 접으면 중앙 영역이 확장된다.
+
+* 기본 테스트: `선택 채널 전체 테스트`와 API 실행 단계, 이미지 비교, 요청·응답 상세
+* 환경 적용 검증: mode/hint 실행 조건, 분석 요약 5개, 접이식 지표와 결과 image card
+* 4채널 진단: 빠른/전체 진단 button과 CH 1~4의 어두운 2x2 tile
+* 로그: 파일·줄 수·level·stage·정렬·검색과 수동/자동 갱신
+
+상단 전역 영역에는 포트, 채널, 실행 중지와 결과 초기화만 둔다. 기능별 실행 button은 해당
+화면 안에 있으므로 현재 작업과 무관한 동작이 함께 보이지 않는다. 모바일 breakpoint는
+지원하지 않으며 1920x1080급 PC 화면을 권장한다.

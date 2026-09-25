@@ -1,0 +1,34 @@
+{
+  "LibraryFileName": "libsample_component.so",
+  "Instance": {
+    "__comment__": "2009002 supplies AppInfo; 2009004 is the LogManager receiver",
+    "InstanceName": "SampleComponent",
+    "SchedulerName": "SampleComponentScheduler",
+    "ReceiverNames": [
+      "AppDispatcher",
+      "AppNetworkManager",
+      "OpenPlatform",
+      {
+        "SymbolName": "LogManager",
+        "RealName": "2009004"
+      }
+    ],
+    "SourceNames": [
+      {
+        "Source": "AppNetworkManager",
+        "GroupName": "NetworkEvent"
+      },
+      {
+        "Source": "OpenPlatform",
+        "GroupName": "AppMessage"
+      },
+      {
+        "Source": "2009002",
+        "GroupName": "AppInfo"
+      }
+    ],
+    "Channel": 0,
+    "ModelPath": "../res/models/",
+    "SettingPath": "../storage/settings/"
+  }
+}

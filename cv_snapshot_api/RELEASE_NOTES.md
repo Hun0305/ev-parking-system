@@ -1,0 +1,87 @@
+﻿# CV Snapshot API Release Notes
+
+이 문서는 실제 구현과 검증 상태를 구분해 기록한다. 출시 버전에는 확인되지 않은 기능이나 외부 구성요소 연동을 포함하지 않는다.
+
+## [refector] - 2026-08-24
+
+`cv_snapshot_api_release`의 별도 소스 복사본이다. ROI와 입력 해상도는 바꾸지 않았다.
+
+- OpenCV 내부 병렬 처리를 기본 1개 스레드로 제한한다.
+- 무거운 Canny·환경 분석·이미지 세트 처리를 하나의 admission slot으로 직렬화하고, 기본
+  2,500 ms 시작 간격을 둔다. 너무 이른 요청은 HTTP 429
+  `PROCESSING_RATE_LIMITED`, 진행 중 요청은 HTTP 503 `PROCESSING_BUSY`를 반환한다.
+- `GET /image/jpg`는 채널별 최근 처리 JPEG를 기본 2,500 ms 동안 반환한다. rate limit 또는
+  busy 상태인데 이전 결과가 있으면 그 stale 결과를 반환해 polling이 새 캡처를 증폭시키지 않는다.
+- 새 값은 `SampleComponent_default_attribute_0.json`의 `opencv_thread_limit`,
+  `processing_min_interval_ms`, `processed_jpeg_cache_ttl_ms`로 조정한다.
+
+CV5 Docker build, 새 CAP 생성, 카메라 runtime CPU·온도·watchdog 검증은 아직 수행하지 않았다.
+
+## [0.1.0] - 2026-08-05
+
+### 기준선
+
+CV5 OpenSDK용 현재 `cv_snapshot_api` 소스와 테스트 UI의 기능 기준선이다. 이 버전은 카메라 프레임을 캡처하고, 동일 프레임의 원본·자동 개선·지정 필터 JPEG를 제공한다.
+
+### 주요 기능
+
+- SDK channel `0`부터 `3`까지 선택 가능한 채널 조회와 진단 흐름
+- JPEG 조회 서버 시작 및 기존 `GET /image/jpg?channel={channel}` 호환 경로
+- 동일 프레임 기준 원본, 자동 개선, 지정 OpenCV 필터 결과 생성
+- 영상 기반 환경 판단과 자동 필터 선택
+- `run_id`와 결과 ID 기반 JPEG 조회
+- 활성 필터 catalog 조회 및 다중 필터 비교용 테스트 웹 UI
+- 파일 로그 조회·삭제와 4채널 순차 진단 UI
+
+### 운영 API
+
+| Method | Endpoint | 역할 |
+|---|---|---|
+| POST | `/opensdk/{app_id}/startserver` | JPEG 조회 TCP HTTP 서버 시작 |
+| GET | `/opensdk/{app_id}/channels` | 지원 채널과 기본 채널 조회 |
+| GET | `/opensdk/{app_id}/filters` | 직접 요청 가능한 처리 필터 조회 |
+| POST | `/opensdk/{app_id}/images/generate` | 한 프레임의 원본·개선·지정 필터 결과 생성 |
+| GET | `http://{camera-ip}:{port}/images/result/jpg?run_id={run_id}&result={id}` | 생성 JPEG 조회 |
+
+상세 요청·응답과 오류 계약은 [`docs/server-api-integration.md`](docs/server-api-integration.md)를 따른다.
+
+### 제공 필터
+
+| 필터 ID | 대응 환경 |
+|---|---|
+| `bilateral_d5` | `sensor_noise` |
+| `stretch_1_99` | `low_contrast` |
+| `fast_bilateral` | `extreme_low_light` |
+| `bilateral_gamma_clahe` | `ir_night` |
+| `backlight_combined` | `backlight` |
+
+### 알려진 제한사항
+
+- 환경 판단은 입력 JPEG의 영상 특징 기반 추정이며, Day/Night 모드, IR LED 상태, IR-cut filter 상태와 센서 흑백 모드는 조회하지 못한다.
+- 동시에 하나의 이미지 생성 요청만 처리하며, 겹친 요청은 `PROCESSING_BUSY`가 될 수 있다.
+- 결과 JPEG는 최근 8개 `run_id`만 메모리에 보관한다. 앱 재시작 시 삭제되며 영구 저장되지 않는다.
+- `auto_filter` 또는 `applied_filter`가 `none`이면 검증된 개선 처리를 적용하지 않은 원본 내용 JPEG를 뜻한다.
+- 인증, HTTPS, 외부 접근 제한과 장기 로그 보존은 범위에 포함되지 않는다.
+
+### 검증 상태
+
+| 항목 | 상태 | 근거 및 경계 |
+|---|---|---|
+| 운영 API route·요청·응답 계약 | 정적 확인 | 현재 C++ source와 서버 연동 문서 대조 |
+| OpenCV/필터 catalog·이미지 결과 cache | 정적 확인 | source 기준, 최신 CAP 재검증 필요 |
+| 테스트 웹 UI·로그 UI | 정적 확인 | source 기준, 최신 CAP 설치 후 재확인 필요 |
+| 과거 묶음 CAP의 이미지·로그 기본 흐름 | 카메라 확인 기록 있음 | 이후 이미지 세트·UI 변경분을 포함한 최신 CAP 증거는 별도 필요 |
+| 현재 source의 CV5 Docker 빌드 | 미검증 | 이 기준선에 대해 새 build 필요 |
+| 현재 source의 CAP 생성·설치 | 미검증 | 이 기준선에 대해 새 CAP 필요 |
+| 현재 source의 카메라 4채널·이미지 세트 런타임 | 미검증 | 최신 CAP 설치 후 확인 필요 |
+| 서버 OCR·STM LED 연동 | 미구현 | `0.2.0` 이후 범위 |
+
+### 호환성
+
+- 위 운영 API의 기존 method와 path를 유지한다.
+- `run_id`는 카메라가 생성하며, 서버가 미리 생성하거나 추측하지 않는다.
+- 레퍼런스 프로젝트 `snapshot_jpeg`, `display_image_opencv`는 변경하지 않았다.
+
+## 다음 버전
+
+`0.2.0`은 저조도 OCR 재촬영 지원을 위한 카메라 메타데이터 확장과 서버·STM 연동 검증을 대상으로 한다. 아직 구현 또는 릴리즈 항목으로 확정하지 않는다. 세부 계획은 [`docs/implementation-plan.adoc`](docs/implementation-plan.adoc)에 기록한다.

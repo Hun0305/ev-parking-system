@@ -1,0 +1,37 @@
+# Local team-share bundle
+_team_share/
+
+# Build outputs
+app/build/
+app/bin/
+app/libs/
+*.o
+*.so
+*.so.*
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+Makefile
+
+# OpenSDK package artifacts
+*.cap
+
+# Runtime/generated data
+app/storage/
+app/res/capture*.jpg
+app/res/capture*.jpeg
+app/res/capture*.png
+app/res/*.log
+*.log
+
+# Secrets / local certificates
+*.pem
+*.key
+*.crt
+
+# Local/editor files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

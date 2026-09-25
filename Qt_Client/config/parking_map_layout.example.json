@@ -1,0 +1,88 @@
+{
+  "version": 3,
+  "canvas_width": 920,
+  "canvas_height": 460,
+  "channel_display_names": {},
+  "zones": [
+    {
+      "zone_id": "EV-01",
+      "zone_type": "EV",
+      "display_name": "EV-01",
+      "slot_order": 1,
+      "camera_channel": "CH1",
+      "iva_area_id": "IVA1",
+      "hall_sensor_id": "HALL_EV_01",
+      "enabled": true
+    },
+    {
+      "zone_id": "EV-02",
+      "zone_type": "EV",
+      "display_name": "EV-02",
+      "slot_order": 2,
+      "camera_channel": "CH1",
+      "iva_area_id": "IVA2",
+      "hall_sensor_id": "HALL_EV_02",
+      "enabled": true
+    },
+    {
+      "zone_id": "EV-03",
+      "zone_type": "EV",
+      "display_name": "EV-03",
+      "slot_order": 3,
+      "camera_channel": "CH1",
+      "iva_area_id": "IVA3",
+      "hall_sensor_id": "HALL_EV_03",
+      "enabled": true
+    },
+    {
+      "zone_id": "EV-04",
+      "zone_type": "EV",
+      "display_name": "EV-04",
+      "slot_order": 4,
+      "camera_channel": "CH1",
+      "iva_area_id": "IVA4",
+      "hall_sensor_id": "HALL_EV_04",
+      "enabled": true
+    },
+    {
+      "zone_id": "P-01",
+      "zone_type": "GENERAL",
+      "display_name": "P-01",
+      "slot_order": 1,
+      "camera_channel": "CH3",
+      "iva_area_id": "IVA1",
+      "hall_sensor_id": "HALL_P_01",
+      "enabled": true
+    },
+    {
+      "zone_id": "P-02",
+      "zone_type": "GENERAL",
+      "display_name": "P-02",
+      "slot_order": 2,
+      "camera_channel": "CH3",
+      "iva_area_id": "IVA2",
+      "hall_sensor_id": "HALL_P_02",
+      "enabled": true
+    },
+    {
+      "zone_id": "P-03",
+      "zone_type": "GENERAL",
+      "display_name": "P-03",
+      "slot_order": 3,
+      "camera_channel": "CH3",
+      "iva_area_id": "IVA3",
+      "hall_sensor_id": "HALL_P_03",
+      "enabled": true
+    },
+    {
+      "zone_id": "P-04",
+      "zone_type": "GENERAL",
+      "display_name": "P-04",
+      "slot_order": 4,
+      "camera_channel": "CH3",
+      "iva_area_id": "IVA4",
+      "hall_sensor_id": "HALL_P_04",
+      "enabled": true
+    }
+  ]
+}
