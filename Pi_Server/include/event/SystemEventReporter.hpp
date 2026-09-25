@@ -94,7 +94,7 @@ public:
     SystemEventReporter& operator=(const SystemEventReporter&) = delete;
 
     bool start();
-    bool stop() noexcept;
+    void stop() noexcept;
     void report(SystemEvent event) noexcept;
 
     [[nodiscard]] bool running() const noexcept;
@@ -114,7 +114,6 @@ private:
 
     Sink sink_;
     Config config_;
-    std::mutex stop_mutex_;
     mutable std::mutex mutex_;
     std::condition_variable condition_;
     std::deque<SystemEvent> queue_;

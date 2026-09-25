@@ -3,9 +3,6 @@
 #include "controllers/parkingcontroller.h"
 #include "parkingmockdata.h"
 
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
 #include <QRandomGenerator>
 
 ParkingSimulationService::ParkingSimulationService(ParkingController *controller,
@@ -104,8 +101,8 @@ void ParkingSimulationService::runSampleMessages()
 {
     if (!m_controller) return;
 
-    for (const QJsonValue &val : ParkingMockData::sampleIncomingMessages()) {
-        m_controller->applyManualJsonMessage(val.toObject());
+    for (const QString &message : ParkingMockData::sampleIncomingMessages()) {
+        m_controller->processIncomingMessage(message);
     }
     emit simulationApplied(QStringLiteral("RX sample messages"));
 }
@@ -113,17 +110,6 @@ void ParkingSimulationService::runSampleMessages()
 void ParkingSimulationService::applyManualMessage(const QString &message)
 {
     if (!m_controller) return;
-    
-    QJsonParseError error;
-    QJsonDocument doc = QJsonDocument::fromJson(message.toUtf8(), &error);
-    if (doc.isNull() || !doc.isObject()) {
-        m_controller->recordEvent(QStringLiteral("SYSTEM"), QStringLiteral("RX_ERROR"),
-                                  QStringLiteral("Manual message is not valid JSON: ") + error.errorString(),
-                                  QStringLiteral("REJECTED"));
-        emit simulationApplied(QStringLiteral("Manual RX JSON Error"));
-        return;
-    }
-    
-    m_controller->applyManualJsonMessage(doc.object());
-    emit simulationApplied(QStringLiteral("Manual RX JSON"));
+    m_controller->processIncomingMessage(message);
+    emit simulationApplied(QStringLiteral("Manual RX: %1").arg(message.left(120)));
 }

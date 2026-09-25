@@ -7,19 +7,14 @@
 #include <opencv2/core.hpp>
 
 #include <chrono>
-#include <algorithm>
-#include <cmath>
 #include <filesystem>
 #include <fstream>
-#include <optional>
 #include <sstream>
 #include <thread>
 
 namespace fs = std::filesystem;
 
 namespace {
-
-constexpr int kMinimumCropPixels = 8;
 
 std::string channelDirectoryName(const std::string& channel_id) {
     if (channel_id.size() > 2 && channel_id.rfind("ch", 0) == 0) {
@@ -38,56 +33,6 @@ bool writeBytes(const fs::path& path,
                  static_cast<std::streamsize>(bytes.size()));
     output.flush();
     return output.good();
-}
-
-std::string stageDirectoryName(const std::string& value) {
-    if (value == "OCCUPANCY_START_EVIDENCE") return "occupancy_start";
-    if (value == "OVERSTAY_EVIDENCE") return "overstay";
-    // 점유 감지는 Hall 또는 IVA가 시작할 수 있으므로 저장 경로에는
-    // 특정 센서 이름을 노출하지 않는다. 이름순으로도 세션 단계가
-    // occupancy_start -> occupied_30s -> occupied_60s -> overstay가 된다.
-    if (value == "HALL_30S") return "occupied_30s";
-    if (value == "HALL_60S") return "occupied_60s";
-    return "capture";
-}
-
-bool validNormalizedRoi(const snapshot::NormalizedRoi& roi) {
-    return std::isfinite(roi.x) && std::isfinite(roi.y) &&
-           std::isfinite(roi.width) && std::isfinite(roi.height) &&
-           roi.x >= 0.0 && roi.y >= 0.0 && roi.width > 0.0 &&
-           roi.height > 0.0 && roi.x < 1.0 && roi.y < 1.0 &&
-           roi.x + roi.width <= 1.0 && roi.y + roi.height <= 1.0;
-}
-
-std::optional<std::vector<unsigned char>> cropJpeg(
-    const std::vector<unsigned char>& jpeg,
-    const snapshot::NormalizedRoi& roi) {
-    if (jpeg.empty() || !validNormalizedRoi(roi)) return std::nullopt;
-    const cv::Mat image = cv::imdecode(jpeg, cv::IMREAD_COLOR);
-    if (image.empty()) return std::nullopt;
-
-    const int left = std::clamp(
-        static_cast<int>(std::lround(roi.x * image.cols)), 0, image.cols - 1);
-    const int top = std::clamp(
-        static_cast<int>(std::lround(roi.y * image.rows)), 0, image.rows - 1);
-    const int right = std::clamp(
-        static_cast<int>(std::lround((roi.x + roi.width) * image.cols)),
-        left + 1, image.cols);
-    const int bottom = std::clamp(
-        static_cast<int>(std::lround((roi.y + roi.height) * image.rows)),
-        top + 1, image.rows);
-    if (right - left < kMinimumCropPixels ||
-        bottom - top < kMinimumCropPixels) {
-        return std::nullopt;
-    }
-    const cv::Mat cropped = image(cv::Rect(left, top, right - left,
-                                           bottom - top)).clone();
-    std::vector<unsigned char> encoded;
-    if (!cv::imencode(".jpg", cropped, encoded,
-                      {cv::IMWRITE_JPEG_QUALITY, 95})) {
-        return std::nullopt;
-    }
-    return encoded;
 }
 
 }
@@ -135,7 +80,7 @@ std::string SnapshotStorage::saveIvaAreaSnapshot(
     const std::string& slot_id,
     const NormalizedRoi& roi
 ) {
-    return saveAreaSnapshot(channel, slot_id, roi, {}, -1, "iva");
+    return saveAreaSnapshot(channel, slot_id, roi, {});
 }
 
 std::string SnapshotStorage::saveEvidenceSnapshot(
@@ -148,8 +93,7 @@ std::string SnapshotStorage::saveEvidenceSnapshot(
     if (session_id < 0 || evidence_reason.empty()) return "";
     const std::string prefix = "session_" + std::to_string(session_id) +
         "_slot_" + slot_id + "_" + evidence_reason;
-    return saveAreaSnapshot(channel, slot_id, roi, prefix, session_id,
-                            stageDirectoryName(evidence_reason) + "/original");
+    return saveAreaSnapshot(channel, slot_id, roi, prefix);
 }
 
 std::string SnapshotStorage::saveHallCaptureSnapshot(
@@ -162,8 +106,7 @@ std::string SnapshotStorage::saveHallCaptureSnapshot(
     if (session_id < 0 || capture_stage.empty()) return "";
     const std::string prefix = "session_" + std::to_string(session_id) +
         "_slot_" + slot_id + "_" + capture_stage;
-    return saveAreaSnapshot(channel, slot_id, roi, prefix, session_id,
-                            stageDirectoryName(capture_stage) + "/original");
+    return saveAreaSnapshot(channel, slot_id, roi, prefix);
 }
 
 StoredImagePair SnapshotStorage::saveCameraApiHallCapture(
@@ -171,7 +114,6 @@ StoredImagePair SnapshotStorage::saveCameraApiHallCapture(
     const std::int64_t session_id,
     const std::string& slot_id,
     const std::string& capture_stage,
-    const NormalizedRoi& roi,
     const std::vector<unsigned char>& original_jpeg,
     const std::vector<unsigned char>& enhanced_jpeg
 ) {
@@ -181,29 +123,14 @@ StoredImagePair SnapshotStorage::saveCameraApiHallCapture(
         util::logError("camera API snapshot contains an empty field or JPEG");
         return {};
     }
-    const auto cropped_original = cropJpeg(original_jpeg, roi);
-    const auto cropped_enhanced = cropJpeg(enhanced_jpeg, roi);
-    if (!cropped_original || !cropped_enhanced) {
-        util::logError("camera API ROI crop failed: session=" +
-                       std::to_string(session_id) + " slot=" + slot_id);
-        return {};
-    }
 
-    const fs::path stage_dir = fs::path(snapshot_dir_) /
-        channelDirectoryName(channel_id) / slot_id /
-        stageDirectoryName(capture_stage);
-    const fs::path original_dir = stage_dir / "original";
-    const fs::path enhanced_dir = stage_dir / "enhanced";
+    const fs::path scene_dir = fs::path(snapshot_dir_) /
+        channelDirectoryName(channel_id) / slot_id / "scene";
+    const fs::path enhanced_dir = scene_dir / "enhanced";
     std::error_code error;
-    fs::create_directories(original_dir, error);
-    if (error) {
-        util::logError("camera API original directory create failed: " +
-                       error.message());
-        return {};
-    }
     fs::create_directories(enhanced_dir, error);
     if (error) {
-        util::logError("camera API enhanced directory create failed: " +
+        util::logError("camera API snapshot directory create failed: " +
                        error.message());
         return {};
     }
@@ -212,13 +139,13 @@ StoredImagePair SnapshotStorage::saveCameraApiHallCapture(
         std::to_string(next_file_sequence_.fetch_add(1));
     const std::string prefix = "session_" + std::to_string(session_id) +
         "_slot_" + slot_id + "_" + capture_stage + "_CAMERA_API_" + unique;
-    const fs::path original_path = original_dir / (prefix + "_original.jpg");
+    const fs::path original_path = scene_dir / (prefix + "_original.jpg");
     const fs::path enhanced_path = enhanced_dir / (prefix + "_enhanced.jpg");
     const fs::path original_temp = original_path.string() + ".tmp";
     const fs::path enhanced_temp = enhanced_path.string() + ".tmp";
 
-    if (!writeBytes(original_temp, *cropped_original) ||
-        !writeBytes(enhanced_temp, *cropped_enhanced)) {
+    if (!writeBytes(original_temp, original_jpeg) ||
+        !writeBytes(enhanced_temp, enhanced_jpeg)) {
         fs::remove(original_temp, error);
         fs::remove(enhanced_temp, error);
         util::logError("camera API JPEG file write failed: session=" +
@@ -248,90 +175,11 @@ StoredImagePair SnapshotStorage::saveCameraApiHallCapture(
     return {original_path.string(), enhanced_path.string()};
 }
 
-StoredImagePair SnapshotStorage::saveCameraApiIvaSnapshot(
-    const std::string& channel_id,
-    const std::string& slot_id,
-    const NormalizedRoi& roi,
-    const std::vector<unsigned char>& original_jpeg,
-    const std::vector<unsigned char>& enhanced_jpeg
-) {
-    if (channel_id.empty() || slot_id.empty() || original_jpeg.empty() ||
-        enhanced_jpeg.empty()) {
-        util::logError("camera API IVA snapshot contains an empty field or JPEG");
-        return {};
-    }
-    const auto cropped_original = cropJpeg(original_jpeg, roi);
-    const auto cropped_enhanced = cropJpeg(enhanced_jpeg, roi);
-    if (!cropped_original || !cropped_enhanced) {
-        util::logError("camera API IVA ROI crop failed: slot=" + slot_id);
-        return {};
-    }
-
-    const fs::path iva_dir = fs::path(snapshot_dir_) /
-        channelDirectoryName(channel_id) / slot_id / "events" / "iva";
-    const fs::path original_dir = iva_dir / "original";
-    const fs::path enhanced_dir = iva_dir / "enhanced";
-    std::error_code error;
-    fs::create_directories(original_dir, error);
-    if (error) {
-        util::logError("camera API IVA original directory create failed: " +
-                       error.message());
-        return {};
-    }
-    fs::create_directories(enhanced_dir, error);
-    if (error) {
-        util::logError("camera API IVA enhanced directory create failed: " +
-                       error.message());
-        return {};
-    }
-
-    const std::string unique = util::nowStringForFilename() + "_" +
-        std::to_string(next_file_sequence_.fetch_add(1));
-    const std::string prefix = "slot_" + slot_id +
-        "_IVA_CAMERA_API_" + unique;
-    const fs::path original_path = original_dir / (prefix + "_original.jpg");
-    const fs::path enhanced_path = enhanced_dir / (prefix + "_enhanced.jpg");
-    const fs::path original_temp = original_path.string() + ".tmp";
-    const fs::path enhanced_temp = enhanced_path.string() + ".tmp";
-
-    if (!writeBytes(original_temp, *cropped_original) ||
-        !writeBytes(enhanced_temp, *cropped_enhanced)) {
-        fs::remove(original_temp, error);
-        fs::remove(enhanced_temp, error);
-        util::logError("camera API IVA JPEG file write failed: slot=" +
-                       slot_id);
-        return {};
-    }
-    fs::rename(original_temp, original_path, error);
-    if (error) {
-        const std::string message = error.message();
-        std::error_code ignored;
-        fs::remove(original_temp, ignored);
-        fs::remove(enhanced_temp, ignored);
-        util::logError("camera API IVA original JPEG commit failed: " +
-                       message);
-        return {};
-    }
-    fs::rename(enhanced_temp, enhanced_path, error);
-    if (error) {
-        const std::string message = error.message();
-        std::error_code ignored;
-        fs::remove(original_path, ignored);
-        fs::remove(enhanced_temp, ignored);
-        util::logError("camera API IVA enhanced JPEG commit failed: " +
-                       message);
-        return {};
-    }
-    return {original_path.string(), enhanced_path.string()};
-}
-
 std::string SnapshotStorage::saveAreaSnapshot(
     const std::shared_ptr<camera::CameraChannel>& channel,
     const std::string& slot_id,
     const NormalizedRoi& roi,
-    const std::string& filename_prefix,
-    const std::int64_t session_id,
-    const std::string& stage_directory
+    const std::string& filename_prefix
 ) {
     if (!channel || slot_id.empty()) return "";
     if (roi.x < 0.0 || roi.y < 0.0 || roi.width <= 0.0 || roi.height <= 0.0 ||
@@ -358,25 +206,13 @@ std::string SnapshotStorage::saveAreaSnapshot(
         util::logError("Invalid IVA ROI for slot=" + slot_id);
         return "";
     }
-    if (pw < kMinimumCropPixels || ph < kMinimumCropPixels) {
-        util::logError("IVA ROI is too small after pixel conversion: slot=" +
-                       slot_id + " size=" + std::to_string(pw) + "x" +
-                       std::to_string(ph));
-        return "";
-    }
 
     cv::Mat cropped = frame(cv::Rect(px, py, pw, ph)).clone();
-    // 슬롯별 고정 촬영 단계 디렉터리를 사용한다. 세션 구분은 파일명의
-    // session_<id>와 IMAGE_LOG.session_id로 유지하므로 조기 출차 시 해당 세션 파일만
-    // 안전하게 정리할 수 있다. 세션 없는 진단 IVA 이미지는 events/iva에 격리한다.
+    // Snapshot은 물리 카메라 채널을 최상위 기준으로 정리한다.
+    // 현재 IVA 담당 ch01은 snapshots/ch1/EV01~EV04 아래에 ROI 장면을 저장하며,
+    // 향후 ch02~ch04도 같은 규칙을 그대로 사용할 수 있다.
     fs::path directory = fs::path(snapshot_dir_) /
-        channelDirectoryName(channel->channel_id) / slot_id;
-    if (session_id >= 0) {
-        directory /= stage_directory.empty() ? "capture" : stage_directory;
-    } else {
-        directory /= "events";
-        directory /= stage_directory.empty() ? "iva" : stage_directory;
-    }
+        channelDirectoryName(channel->channel_id) / slot_id / "scene";
     fs::create_directories(directory);
     std::string filename;
     if (filename_prefix.empty()) {

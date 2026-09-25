@@ -5,27 +5,30 @@ namespace parking {
 bool ParkingSensorSequenceGuard::accept(
     const ParkingSensorEvent& event,
     std::string* reason) {
-    auto& state = stateBySensor_[event.sensorId];
-    const sensor::SensorSequenceFact fact{
-        event.sourceProtocolVersion,
-        event.sourceBootId,
-        event.sourceSequence};
-    const auto decision = sensor::evaluateSensorSequence(state, fact);
-    if (!decision.accepted()) {
-        if (reason != nullptr) *reason = decision.reason;
+    if (!event.sourceSequence.has_value()) {
+        return true;
+    }
+
+    const auto found = lastBySensor_.find(event.sensorId);
+    if (found != lastBySensor_.end() &&
+        *event.sourceSequence <= found->second) {
+        if (reason != nullptr) {
+            *reason = "duplicate or stale sensor sequence";
+        }
         return false;
     }
-    sensor::commitSensorSequence(state, fact);
+
+    lastBySensor_[event.sensorId] = *event.sourceSequence;
     return true;
 }
 
 void ParkingSensorSequenceGuard::reset(
     const std::string& sensorId) {
-    stateBySensor_.erase(sensorId);
+    lastBySensor_.erase(sensorId);
 }
 
 void ParkingSensorSequenceGuard::clear() {
-    stateBySensor_.clear();
+    lastBySensor_.clear();
 }
 
 }  // namespace parking

@@ -24,8 +24,7 @@ std::string EventPayloadBuilder::buildJson(
     const std::string& camera_id,
     const std::string& channel_id,
     const CameraEvent& event,
-    const std::string& snapshot_path,
-    const parking::AppliedParkingRoi* applied_roi
+    const std::string& snapshot_path
 ) {
     std::ostringstream oss;
 
@@ -33,10 +32,6 @@ std::string EventPayloadBuilder::buildJson(
     oss << "\"camera_id\":\"" << util::jsonEscape(camera_id) << "\",";
     oss << "\"channel_id\":\"" << util::jsonEscape(channel_id) << "\",";
     oss << "\"event_channel_id\":\"" << util::jsonEscape(event.event_channel_id) << "\",";
-    oss << "\"video_source_token\":\""
-        << util::jsonEscape(event.video_source_token) << "\",";
-    oss << "\"rule_name\":\"" << util::jsonEscape(event.rule_name) << "\",";
-    oss << "\"action\":\"" << util::jsonEscape(event.action) << "\",";
     oss << "\"source_type\":\"" << util::jsonEscape(event.source_type) << "\",";
     oss << "\"source_id\":\"" << util::jsonEscape(event.source_id) << "\",";
     oss << "\"event_type\":\"" << util::jsonEscape(event.event_type) << "\",";
@@ -48,13 +43,6 @@ std::string EventPayloadBuilder::buildJson(
         << (event.is_iva_area_event ? "iva_area_roi" : "all_channels_full_size")
         << "\",";
     oss << "\"snapshot_path\":\"" << util::jsonEscape(snapshot_path) << "\",";
-    if (applied_roi != nullptr) {
-        const auto& roi = applied_roi->value;
-        oss << "\"roi\":{\"x\":" << roi.x << ",\"y\":" << roi.y
-            << ",\"width\":" << roi.width << ",\"height\":"
-            << roi.height << "},\"roi_revision\":"
-            << applied_roi->revision << ',';
-    }
     oss << "\"clip_path\":\"\",";
     oss << "\"ack_state\":\"unacked\",";
     oss << "\"timestamp\":\"" << util::jsonEscape(event.timestamp) << "\",";
@@ -71,9 +59,7 @@ std::string EventPayloadBuilder::buildFireJson(
     const FireSignal& signal,
     const FireAlarmLifecycle lifecycle,
     const std::string& event_id,
-    const std::string& alarm_id,
-    const std::uint64_t fire_revision,
-    const std::string& delivery_id
+    const std::string& alarm_id
 ) {
     std::ostringstream oss;
 
@@ -94,9 +80,7 @@ std::string EventPayloadBuilder::buildFireJson(
     // 시연에서는 FLAME01~04 가짜 입력을 ch01~04 독립 상태로 연결한다.
     oss << "{";
     oss << "\"event_id\":\"" << util::jsonEscape(event_id) << "\",";
-    oss << "\"delivery_id\":\"" << util::jsonEscape(delivery_id) << "\",";
     oss << "\"alarm_id\":\"" << util::jsonEscape(alarm_id) << "\",";
-    oss << "\"fire_revision\":" << fire_revision << ",";
     oss << "\"camera_id\":\"" << util::jsonEscape(camera_id) << "\",";
     oss << "\"channel_id\":\"" << util::jsonEscape(channel_id) << "\",";
     oss << "\"event_channel_id\":\"\",";

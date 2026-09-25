@@ -1,9 +1,42 @@
-# ev-parking-system
+<p align="center">
+  <img src="./docs/assets/logo.png" width="140" alt="ev-parking-system logo" />
+</p>
 
-CCTV 기반 스마트 주차장 통합 관제 시스템 설계 및 구현 | 2026 졸업작품
+<h1 align="center">EV Parking System</h1>
 
-VEDA 4th Team5 프로젝트의 4개 하위 시스템을 하나의 저장소로 통합했습니다.
-각 폴더는 원래 개별 저장소였으며, 현재는 이 저장소의 하위 디렉터리로 관리됩니다.
+<p align="center">
+  CCTV 기반 스마트 주차장 통합 관제 시스템 설계 및 구현 · 2026 졸업작품
+</p>
+
+<p align="center">
+  <img alt="team" src="https://img.shields.io/badge/VEDA-4th--Team5-1f6feb" />
+  <img alt="release" src="https://img.shields.io/badge/release-v1.0-2ea44f" />
+  <img alt="stack" src="https://img.shields.io/badge/stack-C%2B%2B%20%7C%20Qt%20%7C%20STM32%20%7C%20OpenCV-orange" />
+</p>
+
+---
+
+## 프로젝트 소개
+
+한화비전(Hanwha Vision) CCTV와 STM32 센서 노드를 결합해, 주차면 점유·전기차(EV) 여부·화재를
+실시간으로 감지하고 관제 요원이 Qt 클라이언트 하나로 확인·대응할 수 있게 하는 통합 주차 관제
+시스템입니다.
+
+- **감지** — STM32 홀 센서(점유)와 불꽃 센서(화재)가 LoRa로 Raspberry Pi 게이트웨이에 보고
+- **인식** — Pi 서버가 카메라 Snapshot/RTSP 프레임을 OpenCV로 전처리하고 Gemini OCR로 번호판을
+  판독해 EV / NON_EV / UNKNOWN을 판별, SQLite에 세션·이미지·이벤트로 기록
+- **관제** — Qt 클라이언트가 4채널 RTSP 영상과 주차면 상태(점유 시간, 차량번호, 위반 여부)를
+  표시하고, MQTT로 화재 후보 알림을 받아 즉시 경고
+
+```text
+STM32 (홀/불꽃 센서) → LoRa → Raspberry Pi 서버 (MQTT·Snapshot API·OpenCV·Gemini OCR·SQLite)
+                                        ↓
+                              Qt 관제 클라이언트 (RTSP 영상·주차 상태·화재 알림)
+```
+
+VEDA 4th Team5 프로젝트의 4개 하위 시스템(`Pi_Server`, `Qt_Client`, `STM`, `cv_snapshot_api`)을
+하나의 저장소로 통합했습니다. 각 폴더는 원래 개별 저장소였으며, 현재는 이 저장소의 하위
+디렉터리로 관리됩니다.
 
 ## 구성
 

@@ -6,7 +6,6 @@
 #include "models/parkingstate.h"
 
 #include <QHash>
-#include <QImage>
 #include <QList>
 #include <QSet>
 #include <QStringList>
@@ -17,7 +16,6 @@ class QLabel;
 class QQuickWidget;
 class QTableWidget;
 class QTimer;
-class RtspVideoItem;
 
 class DashboardPage : public QWidget
 {
@@ -33,30 +31,24 @@ public:
     void setFireAlarmStates(const QHash<QString, ChannelFireAlarmState> &alarms);
     void prependEvent(const MonitoringEvent &event);
     void setRtspUrls(const QStringList &lowRtspUrls, const QStringList &highRtspUrls);
-    QImage currentRtspFrame(int channelIndex) const;
-    bool showExpandedChannel(const QString &channel);
 
 signals:
     void rtspDiagnosticsChanged(const QList<RtspChannelDiagnostic> &channels);
-    void eventEvidenceRequested(const QString &eventId);
-    void recentEventsDetailRequested();
+    void evidenceRequested(const QString &sourceId);
 
 private slots:
     void handleVideoChannelClicked();
 
 private:
-    void showHelpDialog();
-    QWidget *createVideoChannel(int channelIndex, const QString &channel,
+    QWidget *createVideoChannel(int channelIndex, const QString &channel, const QString &title,
                                 const QString &lowRtspUrl, const QString &highRtspUrl);
     void startDelayedVideoStreams();
     void toggleVideoChannel(int channelIndex);
-    void applyVideoChannelLayout();
     void publishRtspDiagnostics();
 
     QGridLayout *m_videoGrid = nullptr;
     QList<QWidget *> m_videoChannelWidgets;
     QList<QQuickWidget *> m_videoQuickWidgets;
-    QList<RtspVideoItem *> m_rtspVideoItems;
     QLabel *m_totalSlotsLabel = nullptr;
     QLabel *m_occupiedSlotsLabel = nullptr;
     QLabel *m_vacantSlotsLabel = nullptr;

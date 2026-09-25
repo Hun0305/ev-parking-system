@@ -6,7 +6,6 @@
 #include "snapshot/SnapshotStorage.hpp"
 
 #include <opencv2/core.hpp>
-#include <opencv2/imgcodecs.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -77,8 +76,7 @@ int main() {
                 const auto result = database.insertHallCaptureImage(
                     image.sessionId, image.originalPath, image.enhancedPath,
                     parking::toEnhancementType(image.stage),
-                    parking_timer::utcNow(), image.roi,
-                    image.roiRevision);
+                    parking_timer::utcNow());
                 if (result == database::EvidenceInsertResult::Inserted)
                     return parking::ImageStoreResult::Inserted;
                 if (result == database::EvidenceInsertResult::Duplicate)
@@ -94,18 +92,11 @@ int main() {
         parking::HallCaptureCoordinator coordinator(std::move(ports));
 
         int draftPublishes{};
-        snapshot::NormalizedRoi currentRoi{0.25, 0.25, 0.5, 0.5};
-        std::uint64_t currentRevision{1};
         parking::HallCaptureExecutor executor(
             channels, storage, coordinator,
             [&draftPublishes](const parking::CaptureRequest&) {
                 ++draftPublishes;
                 return false;  // MQTT 실패와 실제 로컬 촬영 성공은 독립이다.
-            }, nullptr, false, nullptr,
-            [&currentRoi, &currentRevision](const std::string& slot_id) {
-                return std::optional<parking::AppliedParkingRoi>{
-                    parking::AppliedParkingRoi{
-                        slot_id, currentRoi, currentRevision}};
             });
 
         const auto sessionId = database.createHallSession(
@@ -115,8 +106,6 @@ int main() {
         require(executor.execute(request(
                     sessionId, parking::CaptureReason::HallOccupied30s)),
                 "local 30s capture failed when MQTT draft publish failed");
-        currentRoi = {0.0, 0.0, 0.25, 0.25};
-        currentRevision = 2;
         require(executor.execute(request(
                     sessionId, parking::CaptureReason::HallOccupied60s)),
                 "local 60s capture failed");
@@ -132,20 +121,11 @@ int main() {
         require(images[0].enhancement_type == "HALL_30S" &&
                     images[1].enhancement_type == "HALL_60S",
                 "capture stages were not stored in order");
-        require(images[0].roi_revision == 1 &&
-                    images[1].roi_revision == 2,
-                "capture IMAGE_LOG did not preserve applied ROI revisions");
         require(ocrSessions == std::vector<std::int64_t>{sessionId},
                 "60s image must wait while 30s OCR is in flight");
         for (const auto& image : images)
             require(fs::is_regular_file(image.original_path),
                     "IMAGE_LOG points to a missing capture file");
-        const cv::Mat firstCrop = cv::imread(images[0].original_path);
-        const cv::Mat secondCrop = cv::imread(images[1].original_path);
-        require(firstCrop.cols == 160 && firstCrop.rows == 120,
-                "30s capture did not use the initial live ROI");
-        require(secondCrop.cols == 80 && secondCrop.rows == 60,
-                "60s capture did not read the updated live ROI");
 
         // 같은 단계 재실행은 DB 중복으로 접히고 새로 쓴 파일은 Executor가 지운다.
         require(executor.execute(request(

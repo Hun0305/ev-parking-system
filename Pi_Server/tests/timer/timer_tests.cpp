@@ -109,8 +109,8 @@ void testEntryViolationAndExit() {
                     parking_timer::VehicleCategory::Ev,
                 "EV seed classification failed");
         require(database.classifyVehicle("234나5678") ==
-                    parking_timer::VehicleCategory::Ev,
-                "legacy PHEV seed was not folded into EV");
+                    parking_timer::VehicleCategory::Phev,
+                "PHEV seed classification failed");
         require(database.classifyVehicle("345다6789") ==
                     parking_timer::VehicleCategory::NonEv,
                 "non-EV seed classification failed");
@@ -120,7 +120,6 @@ void testEntryViolationAndExit() {
 
         parking_timer::EventManager events;
         parking_timer::ParkingSlotManager slots(database, events, 120ms);
-        require(slots.start(), "parking timer worker did not start");
 
         // 정상 EV는 PARKED 한 행을 만들고 타이머 큐에 등록돼야 한다.
         const auto entry = slots.handleEntry("EV01", "123가4567");
@@ -159,9 +158,9 @@ void testEntryViolationAndExit() {
         require(departed->violation_at.has_value(),
                 "exit erased the earlier violation timestamp");
 
-        // 기존 PHEV 등록 차량도 EV로 흡수된 뒤 같은 타이머 정책을 사용한다.
+        // PHEV를 즉시 출차시켜 큐에 남은 노드가 만료 시 조용히 폐기되는지 검증한다.
         const auto early_entry = slots.handleEntry("EV02", "234나5678");
-        require(early_entry.accepted, "folded EV entry was not accepted");
+        require(early_entry.accepted, "PHEV entry was not accepted");
         const auto early_departure = slots.handleExit("EV02");
         require(early_departure.has_value(), "early exit failed");
         std::this_thread::sleep_for(180ms);
@@ -189,7 +188,6 @@ void testExistingCameraSessionScheduling() {
 
         parking_timer::EventManager events;
         parking_timer::ParkingSlotManager slots(database, events, 5s);
-        require(slots.start(), "parking timer worker did not start");
         const auto scheduled = slots.handleRecognizedSession(
             session_id, "EV01", "123가4567");
         require(scheduled.accepted && scheduled.log_id == session_id,
@@ -200,51 +198,21 @@ void testExistingCameraSessionScheduling() {
             session_id, "EV01", "123가4567");
         require(!duplicate.accepted && slots.pendingTimerCount() == 1,
                 "duplicate OCR result scheduled a second timer");
-        int folded_ev_session_id = -1;
+        int phev_session_id = -1;
         require(database.createEntryWithBestShot(
-                    "EV02", "camera_folded_ev.jpg", "object-2",
-                    &folded_ev_session_id),
-                "folded EV camera session setup failed");
-        const auto folded_ev_classification = database.applyPlateOcr(
-            folded_ev_session_id, "EV02", "camera_folded_ev.jpg",
-            "234나5678", 0.93);
-        require(folded_ev_classification == "EV",
-                "OCR DB result did not fold the legacy PHEV into EV");
+                    "EV02", "camera_phev.jpg", "object-2", &phev_session_id),
+                "PHEV camera session setup failed");
+        const auto phev_classification = database.applyPlateOcr(
+            phev_session_id, "EV02", "camera_phev.jpg", "234나5678", 0.93);
+        require(phev_classification == "PHEV",
+                "OCR DB result did not preserve PHEV classification");
         require(slots.handleRecognizedSession(
-                    folded_ev_session_id, "EV02", "234나5678").accepted,
-                "existing folded EV camera session was not scheduled");
+                    phev_session_id, "EV02", "234나5678").accepted,
+                "existing PHEV camera session was not scheduled");
         require(slots.pendingTimerCount() == 2,
-                "both EV timers were not retained");
+                "EV and PHEV timers were not both retained");
         require(database.listLogs().size() == 2,
                 "timer integration inserted a duplicate parking session");
-    }
-    removeDatabaseFiles(path);
-}
-
-/**
- * @brief runtime guard 이전에는 timer 작업을 받지 않고 explicit start가 멱등인지 검증한다.
- *
- * @throws std::runtime_error 시작 전 작업이 수락되거나 worker 시작에 실패한 경우.
- */
-void testTimerRequiresExplicitStart() {
-    const auto path = temporaryDatabase("explicit_start");
-    {
-        EventDatabase database(path);
-        initialize(database);
-        const auto log_id = database.insertParked(
-            "123가4567", "EV01", parking_timer::utcNow(), "entry.jpg");
-        parking_timer::TimerManager timers(
-            database, [](const parking_timer::ViolationEvent&) {});
-        bool rejected{};
-        try {
-            timers.schedule(log_id, "EV01", "123가4567", 1s);
-        } catch (const std::runtime_error&) {
-            rejected = true;
-        }
-        require(rejected,
-                "timer accepted work before the runtime guard could start it");
-        require(timers.start() && timers.start(),
-                "timer explicit start was not successful and idempotent");
     }
     removeDatabaseFiles(path);
 }
@@ -275,7 +243,6 @@ void testEarlierDeadlineWakesWorker() {
                 }
                 condition.notify_one();
             });
-        require(timers.start(), "timer worker did not start");
 
         // worker가 300ms를 기다리기 시작한 뒤 50ms 타이머를 넣어 notify/re-wait 경로를 탄다.
         timers.schedule(first_id, "EV01", "123가4567", 300ms);
@@ -320,7 +287,6 @@ void testWorkerContainsCallbackExceptions() {
                 }
                 condition.notify_one();
             });
-        require(timers.start(), "timer worker did not start");
 
         timers.schedule(log_id, "EV01", "123가4567", 20ms);
         std::unique_lock lock(mutex);
@@ -354,7 +320,6 @@ void testSnapshotFailureStillMarksViolation() {
             [](std::int64_t, const std::string&, const std::string&) -> std::string {
                 throw std::runtime_error("simulated camera failure");
             });
-        require(timers.start(), "timer worker did not start");
         timers.schedule(log_id, "EV01", "123가4567", 20ms);
         require(waitUntil([&] {
                     const auto record = database.findLogById(log_id);
@@ -392,7 +357,6 @@ void testPendingEvidenceRetriesBeforeViolation() {
                 return provider_calls.fetch_add(1) == 0
                     ? std::string{} : "overstay-restored.jpg";
             });
-        require(timers.start(), "timer worker did not start");
         timers.schedule(log_id, "EV01", "123가4567", 20ms);
         std::unique_lock lock(mutex);
         require(condition.wait_for(lock, 1500ms,
@@ -402,45 +366,6 @@ void testPendingEvidenceRetriesBeforeViolation() {
                 "violation used an empty or unexpected evidence path");
         require(provider_calls.load() >= 2,
                 "evidence provider was not called again");
-    }
-    removeDatabaseFiles(path);
-}
-
-void testActiveSessionThresholdReschedule() {
-    const auto path = temporaryDatabase("threshold_reschedule");
-    {
-        EventDatabase database(path);
-        initialize(database);
-        parking_timer::EventManager events;
-        parking_timer::ParkingSlotManager slots(database, events, 500ms);
-        require(slots.start(), "parking timer worker did not start");
-        const auto entry = slots.handleEntry("EV01", "123가4567");
-        require(entry.accepted && entry.log_id.has_value(),
-                "reschedule fixture entry failed");
-        std::this_thread::sleep_for(30ms);
-        require(slots.updateParkingTimeout(120ms) == 1,
-                "active session was not rescheduled");
-        require(slots.pendingTimerCount() == 1,
-                "old timer generation remained logically active");
-        require(waitUntil([&] {
-                    const auto record = database.findLogById(*entry.log_id);
-                    return record && record->status == "VIOLATION";
-                }, 500ms),
-                "shortened threshold did not expire active session");
-
-        const auto second = slots.handleEntry("EV02", "234나5678");
-        require(second.accepted && second.log_id.has_value(),
-                "raised threshold fixture entry failed");
-        require(slots.updateParkingTimeout(350ms) == 1,
-                "raised threshold was not applied");
-        std::this_thread::sleep_for(170ms);
-        require(database.findLogById(*second.log_id)->status == "PARKED",
-                "stale earlier timer violated session after threshold increase");
-        require(waitUntil([&] {
-                    const auto record = database.findLogById(*second.log_id);
-                    return record && record->status == "VIOLATION";
-                }, 500ms),
-                "raised threshold replacement never expired");
     }
     removeDatabaseFiles(path);
 }
@@ -456,12 +381,10 @@ int main() {
     try {
         testEntryViolationAndExit();
         testExistingCameraSessionScheduling();
-        testTimerRequiresExplicitStart();
         testEarlierDeadlineWakesWorker();
         testWorkerContainsCallbackExceptions();
         testSnapshotFailureStillMarksViolation();
         testPendingEvidenceRetriesBeforeViolation();
-        testActiveSessionThresholdReschedule();
         std::cout << "All parking timer tests passed.\n";
         return 0;
     } catch (const std::exception& error) {

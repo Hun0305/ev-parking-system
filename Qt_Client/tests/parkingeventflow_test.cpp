@@ -25,8 +25,6 @@ int main(int argc, char **argv)
     QStringList fireConfirmationRequests;
     QStringList fireConfirmationRetries;
     QStringList fireConfirmationCloses;
-    int stateChangeCount = 0;
-    int notificationChangeCount = 0;
 
     QObject::connect(
         &controller, &ParkingController::eventLogged, &app,
@@ -56,66 +54,34 @@ int main(int argc, char **argv)
         &app, [&](const QString &channelId, const QString &) {
             fireConfirmationCloses.append(channelId);
         });
-    QObject::connect(
-        &controller, &ParkingController::stateChanged, &app,
-        [&]() { ++stateChangeCount; });
-    QObject::connect(
-        &notifications, &NotificationCenter::notificationsChanged, &app,
-        [&]() { ++notificationChangeCount; });
 
-    controller.applyManualJsonMessage(QJsonObject{{QStringLiteral("event_type"), QStringLiteral("INVALID")}});
+    controller.processIncomingMessage(QStringLiteral("INVALID"));
     if (events.size() != 1) return 3;
     if (events.constLast().id.isEmpty() || !events.constLast().occurredAt.isValid()) return 4;
-    if (events.constLast().eventType != QStringLiteral("RX_UNSUPPORTED")) {
-        qDebug() << "Test failed at 5, event type:" << events.constLast().eventType;
-        return 5;
-    }
+    if (events.constLast().eventType != QStringLiteral("RX_ERROR")) return 5;
     if (events.constLast().status != QStringLiteral("REJECTED")) return 6;
     if (events.constLast().ackState != EventAckState::None) return 7;
     if (notifications.hasNotifications()) return 8;
 
-    controller.applyManualJsonMessage(QJsonObject{
-        {QStringLiteral("event_type"), QStringLiteral("SLOT_OCCUPIED")},
-        {QStringLiteral("slot_id"), QStringLiteral("P01")},
-        {QStringLiteral("plate_number"), QStringLiteral("34C5678")},
-        {QStringLiteral("parking_state"), QStringLiteral("OCCUPIED")}
-    });
-    if (controller.slotState(QStringLiteral("P-01")) != SlotState::Occupied) return 9;
-    if (controller.plateNumber(QStringLiteral("P-01"))
-        != QStringLiteral("34C5678")) return 129;
-    if (events.constLast().sourceId != QStringLiteral("P-01")) return 10;
-    if (events.constLast().eventType != QStringLiteral("SLOT_OCCUPIED")) return 11;
+    controller.processIncomingMessage(QStringLiteral("PARKING_SLOT, P04, OCCUPIED"));
+    if (controller.slotState(QStringLiteral("P-04")) != SlotState::Occupied) return 9;
+    if (events.constLast().sourceId != QStringLiteral("P-04")) return 10;
+    if (events.constLast().eventType != QStringLiteral("OCCUPIED")) return 11;
 
-    controller.applyManualJsonMessage(QJsonObject{
-        {QStringLiteral("event_type"), QStringLiteral("SENSOR_ERROR")},
-        {QStringLiteral("slot_id"), QStringLiteral("P-03")},
-        {QStringLiteral("alarm_state"), QStringLiteral("OPEN")},
-        {QStringLiteral("message"), QStringLiteral("sensor, disconnected")}
-    });
+    controller.processIncomingMessage(
+        QStringLiteral("EVENT, P03, HALL_SENSOR_ERROR, OPEN, sensor, disconnected"));
     if (events.constLast().sourceId != QStringLiteral("P-03")) return 12;
     if (events.constLast().message != QStringLiteral("sensor, disconnected")) return 13;
     if (events.constLast().ackState != EventAckState::Open) return 14;
     if (notifications.notifications().size() != 1) return 15;
     if (notifications.notifications().constFirst().severity != QStringLiteral("WARNING")) return 16;
 
-    controller.applyManualJsonMessage(QJsonObject{
-        {QStringLiteral("event_type"), QStringLiteral("SENSOR_RECOVERED")},
-        {QStringLiteral("slot_id"), QStringLiteral("P-03")},
-        {QStringLiteral("alarm_state"), QStringLiteral("CLEARED")},
-        {QStringLiteral("message"), QStringLiteral("sensor recovered")}
-    });
+    controller.processIncomingMessage(
+        QStringLiteral("EVENT, P03, HALL_SENSOR_CLEAR, CLEARED, sensor recovered"));
     if (events.constLast().ackState != EventAckState::Cleared) return 17;
     if (notifications.hasNotifications()) return 18;
 
-    controller.applyManualJsonMessage(QJsonObject{
-        {QStringLiteral("event_type"), QStringLiteral("FIRE_SUSPECTED")},
-        {QStringLiteral("event_id"), QStringLiteral("ev-123")},
-        {QStringLiteral("alarm_id"), QStringLiteral("al-123")},
-        {QStringLiteral("channel_id"), QStringLiteral("CH2")},
-        {QStringLiteral("alarm_kind"), QStringLiteral("FIRE_SUSPECTED")},
-        {QStringLiteral("alarm_state"), QStringLiteral("OPEN")},
-        {QStringLiteral("active"), true}
-    });
+    controller.processIncomingMessage(QStringLiteral("FIRE_ALARM, CH2, DETECTED"));
     if (events.constLast().sourceId != QStringLiteral("CH2")) return 19;
     if (events.constLast().eventType != QStringLiteral("FIRE_SUSPECTED")) return 20;
     if (events.constLast().status != QStringLiteral("OPEN")) return 20;
@@ -125,22 +91,9 @@ int main(int argc, char **argv)
     if (notifications.notifications().constFirst().sourceId
         != QStringLiteral("CH2")) return 23;
 
-    controller.applyManualJsonMessage(QJsonObject{
-        {QStringLiteral("event_type"), QStringLiteral("FIRE_CLEARED")},
-        {QStringLiteral("alarm_id"), QStringLiteral("al-123")},
-        {QStringLiteral("channel_id"), QStringLiteral("CH2")},
-        {QStringLiteral("alarm_state"), QStringLiteral("RESOLVED")},
-        {QStringLiteral("ack_state"), QStringLiteral("resolved")},
-        {QStringLiteral("active"), false}
-    });
-    if (events.constLast().eventType != QStringLiteral("FIRE_CLEARED")) {
-        qDebug() << "Actual eventType:" << events.constLast().eventType;
-        return 23;
-    }
-    if (events.constLast().status != QStringLiteral("CLEARED")) {
-        qDebug() << "Actual status:" << events.constLast().status;
-        return 24;
-    }
+    controller.processIncomingMessage(QStringLiteral("FIRE_ALARM, CH2, CLEAR"));
+    if (events.constLast().eventType != QStringLiteral("FIRE_CLEARED")) return 23;
+    if (events.constLast().status != QStringLiteral("CLEARED")) return 24;
     if (events.constLast().ackState != EventAckState::Cleared) return 25;
     if (!controller.state().fireChannels.isEmpty()) return 26;
     if (notifications.hasNotifications()) return 26;
@@ -267,8 +220,6 @@ int main(int argc, char **argv)
     if (events.constLast().eventType != QStringLiteral("NON_EV_ALERT")) return 55;
     if (events.constLast().status != QStringLiteral("OPEN")) return 56;
     if (notifications.notifications().size() != 1) return 57;
-    if (notifications.notifications().constFirst().eventId
-        != QStringLiteral("session-7-non-ev")) return 131;
 
     const QByteArray overstayPayload = R"JSON({
         "event_id": "session-8-overstay",
@@ -347,14 +298,10 @@ int main(int argc, char **argv)
     if (controller.state().evSlots.size() != 1) return 71;
     if (!controller.state().parkingSlots.isEmpty()) return 72;
     if (controller.state().evSlots.contains(QStringLiteral("EV-02"))) return 73;
-    if (!controller.state().hasServerSnapshot
-        || controller.state().serverSlotCount != 1) return 74;
     const EvSlotInfo snapshotSlot =
         controller.state().evSlots.value(QStringLiteral("EV-01"));
-    if (snapshotSlot.visual.occupancy != SlotOccupancy::Occupied) return 75;
-    if (snapshotSlot.visual.vehicleClass != VehicleClass::Electric) return 76;
-    controller.applyParkingSlotUpdate(QStringLiteral("P-99"), SlotState::Vacant);
-    if (controller.state().serverSlotCount != 1) return 77;
+    if (snapshotSlot.visual.occupancy != SlotOccupancy::Occupied) return 74;
+    if (snapshotSlot.visual.vehicleClass != VehicleClass::Electric) return 75;
 
     const QByteArray systemErrorPayload = R"JSON({
         "event_id": "system-uart-disconnected",
@@ -744,384 +691,20 @@ int main(int argc, char **argv)
     notifications.clearAll();
     const QSet<QString> fireChannelsBeforeRejectedSlotFire =
         controller.state().fireChannels;
-    controller.applyManualJsonMessage(QJsonObject{
-        {QStringLiteral("event_type"), QStringLiteral("FIRE_SUSPECTED")},
-        {QStringLiteral("slot_id"), QStringLiteral("EV-04")}
-    });
+    controller.processIncomingMessage(QStringLiteral(
+        "EVENT, EV04, FIRE_SUSPECTED, OPEN, invalid slot-scoped fire"));
     if (events.constLast().sourceId != QStringLiteral("SYSTEM")) return 123;
     if (events.constLast().eventType
-        != QStringLiteral("MQTT_FIRE_CONTRACT_ERROR")) return 124;
+        != QStringLiteral("FIRE_CHANNEL_ERROR")) return 124;
     if (controller.state().fireChannels
         != fireChannelsBeforeRejectedSlotFire) return 125;
 
-    controller.applyManualJsonMessage(QJsonObject{
-        {QStringLiteral("event_type"), QStringLiteral("FIRE_SUSPECTED")},
-        {QStringLiteral("slot_id"), QStringLiteral("P-16")}
-    });
+    controller.processIncomingMessage(
+        QStringLiteral("PARKING_SLOT, P16, FIRE_SUSPECTED"));
     if (events.constLast().sourceId != QStringLiteral("SYSTEM")) return 126;
     if (events.constLast().eventType
-        != QStringLiteral("MQTT_FIRE_CONTRACT_ERROR")) return 127;
+        != QStringLiteral("FIRE_CHANNEL_ERROR")) return 127;
     if (controller.state().parkingSlots.contains(QStringLiteral("P-16"))) return 128;
-
-    const auto revisionedFirePayload = [](
-        const QString &channelId, const QString &eventId,
-        const QString &deliveryId, const QString &alarmId,
-        const quint64 revision, const QString &eventType,
-        const QString &alarmKind, const QString &alarmState,
-        const QString &ackState, const bool active,
-        const QString &message = QString()) {
-        QJsonObject object{
-            {QStringLiteral("event_id"), eventId},
-            {QStringLiteral("delivery_id"), deliveryId},
-            {QStringLiteral("alarm_id"), alarmId},
-            {QStringLiteral("fire_revision"), static_cast<double>(revision)},
-            {QStringLiteral("event_type"), eventType},
-            {QStringLiteral("channel_id"), channelId},
-            {QStringLiteral("source_id"), QStringLiteral("FIRE-") + channelId},
-            {QStringLiteral("alarm_kind"), alarmKind},
-            {QStringLiteral("alarm_state"), alarmState},
-            {QStringLiteral("ack_state"), ackState},
-            {QStringLiteral("active"), active},
-            {QStringLiteral("scope"), QStringLiteral("CAMERA_CHANNEL")}
-        };
-        if (!message.isEmpty()) {
-            object.insert(QStringLiteral("message"), message);
-        }
-        return QJsonDocument(object).toJson(QJsonDocument::Compact);
-    };
-
-    const QByteArray revisionedOpenEvent = revisionedFirePayload(
-        QStringLiteral("ch03"), QStringLiteral("fire-ch3-open-1"),
-        QStringLiteral("event-ch3-open-1"), QStringLiteral("alarm-ch3-a"),
-        1, QStringLiteral("FIRE_SUSPECTED"),
-        QStringLiteral("FIRE_SUSPECTED"), QStringLiteral("OPEN"),
-        QStringLiteral("unacked"), true);
-    const int statesBeforeRevisionedOpen = stateChangeCount;
-    const int eventsBeforeRevisionedOpen = events.size();
-    const int confirmationsBeforeRevisionedOpen = fireConfirmationRequests.size();
-    const int notificationsBeforeRevisionedOpen = notificationChangeCount;
-    if (!deliverMqtt(QStringLiteral("parking/v1/events/ch03"),
-                     revisionedOpenEvent, false)) return 159;
-    if (!controller.state().fireChannels.contains(QStringLiteral("CH3"))
-        || stateChangeCount != statesBeforeRevisionedOpen + 1
-        || events.size() != eventsBeforeRevisionedOpen + 1
-        || fireConfirmationRequests.size()
-            != confirmationsBeforeRevisionedOpen + 1
-        || notificationChangeCount != notificationsBeforeRevisionedOpen + 1
-        || notifications.notifications().size() != 1) return 160;
-
-    const QByteArray revisionedOpenState = revisionedFirePayload(
-        QStringLiteral("ch03"), QStringLiteral("fire-ch3-open-1"),
-        QStringLiteral("state-ch3-open-1"), QStringLiteral("alarm-ch3-a"),
-        1, QStringLiteral("FIRE_SUSPECTED"),
-        QStringLiteral("FIRE_SUSPECTED"), QStringLiteral("OPEN"),
-        QStringLiteral("unacked"), true);
-    const int statesBeforeCrossSinkReplay = stateChangeCount;
-    const int eventsBeforeCrossSinkReplay = events.size();
-    const int confirmationsBeforeCrossSinkReplay = fireConfirmationRequests.size();
-    const int notificationsBeforeCrossSinkReplay = notificationChangeCount;
-    if (!deliverMqtt(QStringLiteral("parking/fire/ch03"),
-                     revisionedOpenState, true)) return 161;
-    if (!deliverMqtt(QStringLiteral("parking/v1/events/ch03"),
-                     revisionedOpenEvent, false)) return 162;
-    if (stateChangeCount != statesBeforeCrossSinkReplay
-        || events.size() != eventsBeforeCrossSinkReplay
-        || fireConfirmationRequests.size() != confirmationsBeforeCrossSinkReplay
-        || notificationChangeCount != notificationsBeforeCrossSinkReplay
-        || notifications.notifications().size() != 1) return 163;
-
-    const QByteArray changedDeliveryPayload = revisionedFirePayload(
-        QStringLiteral("ch03"), QStringLiteral("fire-ch3-open-1"),
-        QStringLiteral("event-ch3-open-1"), QStringLiteral("alarm-ch3-a"),
-        1, QStringLiteral("FIRE_SUSPECTED"),
-        QStringLiteral("FIRE_SUSPECTED"), QStringLiteral("OPEN"),
-        QStringLiteral("unacked"), true, QStringLiteral("changed payload"));
-    const int statesBeforeDeliveryConflict = stateChangeCount;
-    const int confirmationsBeforeDeliveryConflict = fireConfirmationRequests.size();
-    const int notificationsBeforeDeliveryConflict = notificationChangeCount;
-    if (!deliverMqtt(QStringLiteral("parking/v1/events/ch03"),
-                     changedDeliveryPayload, false)) return 164;
-    if (stateChangeCount != statesBeforeDeliveryConflict
-        || fireConfirmationRequests.size() != confirmationsBeforeDeliveryConflict
-        || notificationChangeCount != notificationsBeforeDeliveryConflict
-        || events.constLast().eventType
-            != QStringLiteral("MQTT_FIRE_CONTRACT_ERROR")) return 165;
-
-    const QByteArray sameRevisionConflict = revisionedFirePayload(
-        QStringLiteral("ch03"), QStringLiteral("fire-ch3-open-conflict"),
-        QStringLiteral("event-ch3-open-conflict"),
-        QStringLiteral("alarm-ch3-conflict"), 1,
-        QStringLiteral("FIRE_SUSPECTED"),
-        QStringLiteral("FIRE_SUSPECTED"), QStringLiteral("OPEN"),
-        QStringLiteral("unacked"), true);
-    if (!deliverMqtt(QStringLiteral("parking/v1/events/ch03"),
-                     sameRevisionConflict, false)) return 166;
-    if (stateChangeCount != statesBeforeDeliveryConflict
-        || fireConfirmationRequests.size() != confirmationsBeforeDeliveryConflict
-        || notificationChangeCount != notificationsBeforeDeliveryConflict
-        || controller.state().fireAlarms.value(QStringLiteral("CH3")).alarmId
-            != QStringLiteral("alarm-ch3-a")) return 167;
-
-    const QByteArray revisionedAck = revisionedFirePayload(
-        QStringLiteral("ch03"), QStringLiteral("fire-ch3-ack-2"),
-        QStringLiteral("event-ch3-ack-2"), QStringLiteral("alarm-ch3-a"),
-        2, QStringLiteral("FIRE_ACKNOWLEDGED"),
-        QStringLiteral("FIRE_SUSPECTED"), QStringLiteral("ACKNOWLEDGED"),
-        QStringLiteral("acknowledged"), true);
-    const int closesBeforeAck = fireConfirmationCloses.size();
-    if (!deliverMqtt(QStringLiteral("parking/v1/events/ch03"),
-                     revisionedAck, false)) return 168;
-    if (!controller.state().fireAlarms.value(QStringLiteral("CH3")).acknowledged
-        || fireConfirmationCloses.size() != closesBeforeAck + 1
-        || notifications.hasNotifications()) return 169;
-    const int statesAfterAck = stateChangeCount;
-    const int eventsAfterAck = events.size();
-    const int closesAfterAck = fireConfirmationCloses.size();
-    const int notificationChangesAfterAck = notificationChangeCount;
-    if (!deliverMqtt(QStringLiteral("parking/v1/events/ch03"),
-                     revisionedAck, false)) return 170;
-    if (stateChangeCount != statesAfterAck || events.size() != eventsAfterAck
-        || fireConfirmationCloses.size() != closesAfterAck
-        || notificationChangeCount != notificationChangesAfterAck) return 171;
-
-    const QByteArray revisionedClear = revisionedFirePayload(
-        QStringLiteral("ch03"), QStringLiteral("fire-ch3-clear-3"),
-        QStringLiteral("event-ch3-clear-3"), QStringLiteral("alarm-ch3-a"),
-        3, QStringLiteral("FIRE_CLEARED"), QStringLiteral("NONE"),
-        QStringLiteral("RESOLVED"), QStringLiteral("resolved"), false);
-    if (!deliverMqtt(QStringLiteral("parking/v1/events/ch03"),
-                     revisionedClear, false)) return 172;
-    if (controller.state().fireChannels.contains(QStringLiteral("CH3"))) return 173;
-    const int statesAfterClear = stateChangeCount;
-    const int eventsAfterClear = events.size();
-    const int closesAfterClear = fireConfirmationCloses.size();
-    const int confirmationsAfterClear = fireConfirmationRequests.size();
-    const int notificationChangesAfterClear = notificationChangeCount;
-    if (!deliverMqtt(QStringLiteral("parking/v1/events/ch03"),
-                     revisionedClear, false)) return 174;
-    if (!deliverMqtt(QStringLiteral("parking/v1/events/ch03"),
-                     revisionedOpenEvent, false)) return 175;
-    if (!deliverMqtt(QStringLiteral("parking/fire/ch03"),
-                     revisionedOpenState, true)) return 176;
-    if (controller.state().fireChannels.contains(QStringLiteral("CH3"))
-        || stateChangeCount != statesAfterClear
-        || events.size() != eventsAfterClear
-        || fireConfirmationCloses.size() != closesAfterClear
-        || fireConfirmationRequests.size() != confirmationsAfterClear
-        || notificationChangeCount != notificationChangesAfterClear) return 177;
-
-    QJsonObject revisionlessAfterV2 =
-        QJsonDocument::fromJson(revisionedOpenEvent).object();
-    revisionlessAfterV2.remove(QStringLiteral("fire_revision"));
-    revisionlessAfterV2.remove(QStringLiteral("delivery_id"));
-    const int statesBeforeInvalidRevisions = stateChangeCount;
-    const int confirmationsBeforeInvalidRevisions = fireConfirmationRequests.size();
-    const int closesBeforeInvalidRevisions = fireConfirmationCloses.size();
-    const int notificationsBeforeInvalidRevisions = notificationChangeCount;
-    if (!deliverMqtt(
-            QStringLiteral("parking/v1/events/ch03"),
-            QJsonDocument(revisionlessAfterV2).toJson(QJsonDocument::Compact),
-            false)) return 178;
-    if (controller.state().fireChannels.contains(QStringLiteral("CH3"))
-        || stateChangeCount != statesBeforeInvalidRevisions
-        || fireConfirmationRequests.size() != confirmationsBeforeInvalidRevisions
-        || fireConfirmationCloses.size() != closesBeforeInvalidRevisions
-        || notificationChangeCount != notificationsBeforeInvalidRevisions
-        || events.constLast().eventType
-            != QStringLiteral("MQTT_FIRE_CONTRACT_ERROR")) return 179;
-
-    const QList<QJsonValue> invalidRevisions{
-        QJsonValue(0), QJsonValue(-1), QJsonValue(1.5),
-        QJsonValue(QStringLiteral("4")), QJsonValue(9007199254740992.0)};
-    for (const QJsonValue &invalidRevision : invalidRevisions) {
-        QJsonObject invalid = QJsonDocument::fromJson(revisionedOpenEvent).object();
-        invalid.insert(QStringLiteral("fire_revision"), invalidRevision);
-        if (!deliverMqtt(
-                QStringLiteral("parking/v1/events/ch03"),
-                QJsonDocument(invalid).toJson(QJsonDocument::Compact),
-                false)) return 180;
-    }
-    const QStringList requiredV2Ids{
-        QStringLiteral("delivery_id"), QStringLiteral("event_id"),
-        QStringLiteral("alarm_id")};
-    for (const QString &field : requiredV2Ids) {
-        QJsonObject invalid = QJsonDocument::fromJson(revisionedOpenEvent).object();
-        invalid.insert(field, QString());
-        if (!deliverMqtt(
-                QStringLiteral("parking/v1/events/ch03"),
-                QJsonDocument(invalid).toJson(QJsonDocument::Compact),
-                false)) return 181;
-    }
-    if (controller.state().fireChannels.contains(QStringLiteral("CH3"))
-        || stateChangeCount != statesBeforeInvalidRevisions
-        || fireConfirmationRequests.size() != confirmationsBeforeInvalidRevisions
-        || fireConfirmationCloses.size() != closesBeforeInvalidRevisions
-        || notificationChangeCount != notificationsBeforeInvalidRevisions) return 182;
-
-    const QByteArray reusedEventId = revisionedFirePayload(
-        QStringLiteral("ch03"), QStringLiteral("fire-ch3-clear-3"),
-        QStringLiteral("event-ch3-reused-id"), QStringLiteral("alarm-ch3-b"),
-        4, QStringLiteral("FIRE_SUSPECTED"),
-        QStringLiteral("FIRE_SUSPECTED"), QStringLiteral("OPEN"),
-        QStringLiteral("unacked"), true);
-    if (!deliverMqtt(QStringLiteral("parking/v1/events/ch03"),
-                     reusedEventId, false)) return 200;
-    if (controller.state().fireChannels.contains(QStringLiteral("CH3"))
-        || stateChangeCount != statesBeforeInvalidRevisions
-        || fireConfirmationRequests.size() != confirmationsBeforeInvalidRevisions
-        || notificationChangeCount != notificationsBeforeInvalidRevisions
-        || events.constLast().eventType
-            != QStringLiteral("MQTT_FIRE_CONTRACT_ERROR")) return 201;
-
-    const QByteArray reusedDeliveryId = revisionedFirePayload(
-        QStringLiteral("ch03"), QStringLiteral("fire-ch3-open-4"),
-        QStringLiteral("state-ch3-open-1"), QStringLiteral("alarm-ch3-b"),
-        4, QStringLiteral("FIRE_SUSPECTED"),
-        QStringLiteral("FIRE_SUSPECTED"), QStringLiteral("OPEN"),
-        QStringLiteral("unacked"), true);
-    if (!deliverMqtt(QStringLiteral("parking/fire/ch03"),
-                     reusedDeliveryId, true)) return 202;
-    if (!controller.state().fireChannels.contains(QStringLiteral("CH3"))
-        || stateChangeCount != statesBeforeInvalidRevisions + 1
-        || fireConfirmationRequests.size()
-            != confirmationsBeforeInvalidRevisions + 1
-        || notificationChangeCount != notificationsBeforeInvalidRevisions
-        || controller.state().fireAlarms.value(QStringLiteral("CH3")).alarmId
-            != QStringLiteral("alarm-ch3-b")) return 203;
-
-    const QByteArray skippedOpen = revisionedFirePayload(
-        QStringLiteral("ch03"), QStringLiteral("fire-ch3-open-5"),
-        QStringLiteral("state-ch3-open-5"), QStringLiteral("alarm-ch3-b"),
-        5, QStringLiteral("FIRE_SUSPECTED"),
-        QStringLiteral("FIRE_SUSPECTED"), QStringLiteral("OPEN"),
-        QStringLiteral("unacked"), true);
-    if (!deliverMqtt(QStringLiteral("parking/fire/ch03"), skippedOpen, true)) {
-        return 183;
-    }
-    if (!controller.state().fireChannels.contains(QStringLiteral("CH3"))
-        || controller.state().fireAlarms.value(QStringLiteral("CH3")).alarmId
-            != QStringLiteral("alarm-ch3-b")) return 184;
-    const int confirmationsAfterSkippedOpen = fireConfirmationRequests.size();
-
-    const QByteArray authoritativeMismatchedClear = revisionedFirePayload(
-        QStringLiteral("ch03"), QStringLiteral("fire-ch3-clear-7"),
-        QStringLiteral("state-ch3-clear-7"), QStringLiteral("alarm-ch3-c"),
-        7, QStringLiteral("FIRE_CLEARED"), QStringLiteral("NONE"),
-        QStringLiteral("RESOLVED"), QStringLiteral("resolved"), false);
-    if (!deliverMqtt(QStringLiteral("parking/fire/ch03"),
-                     authoritativeMismatchedClear, true)) return 185;
-    if (controller.state().fireChannels.contains(QStringLiteral("CH3"))
-        || fireConfirmationRequests.size() != confirmationsAfterSkippedOpen) {
-        return 186;
-    }
-
-    const QByteArray newestOpen = revisionedFirePayload(
-        QStringLiteral("ch03"), QStringLiteral("fire-ch3-open-8"),
-        QStringLiteral("state-ch3-open-8"), QStringLiteral("alarm-ch3-d"),
-        8, QStringLiteral("FIRE_SUSPECTED"),
-        QStringLiteral("FIRE_SUSPECTED"), QStringLiteral("OPEN"),
-        QStringLiteral("unacked"), true);
-    if (!deliverMqtt(QStringLiteral("parking/fire/ch03"), newestOpen, true)) {
-        return 187;
-    }
-    const int closesBeforeStaleClear = fireConfirmationCloses.size();
-    const QByteArray staleClear = revisionedFirePayload(
-        QStringLiteral("ch03"), QStringLiteral("fire-ch3-clear-stale"),
-        QStringLiteral("event-ch3-clear-stale"), QStringLiteral("alarm-ch3-d"),
-        7, QStringLiteral("FIRE_CLEARED"), QStringLiteral("NONE"),
-        QStringLiteral("RESOLVED"), QStringLiteral("resolved"), false);
-    if (!deliverMqtt(QStringLiteral("parking/v1/events/ch03"),
-                     staleClear, false)) return 188;
-    if (!controller.state().fireChannels.contains(QStringLiteral("CH3"))
-        || fireConfirmationCloses.size() != closesBeforeStaleClear) return 189;
-
-    const QByteArray newestClear = revisionedFirePayload(
-        QStringLiteral("ch03"), QStringLiteral("fire-ch3-clear-9"),
-        QStringLiteral("state-ch3-clear-9"), QStringLiteral("alarm-ch3-d"),
-        9, QStringLiteral("FIRE_CLEARED"), QStringLiteral("NONE"),
-        QStringLiteral("RESOLVED"), QStringLiteral("resolved"), false);
-    if (!deliverMqtt(QStringLiteral("parking/fire/ch03"), newestClear, true)) {
-        return 190;
-    }
-    if (controller.state().fireChannels.contains(QStringLiteral("CH3"))) return 191;
-
-    notifications.clearAll();
-    const QByteArray channelFourState = revisionedFirePayload(
-        QStringLiteral("ch04"), QStringLiteral("fire-ch4-open-1"),
-        QStringLiteral("state-ch4-open-1"), QStringLiteral("alarm-ch4-a"),
-        1, QStringLiteral("FIRE_SUSPECTED"),
-        QStringLiteral("FIRE_SUSPECTED"), QStringLiteral("OPEN"),
-        QStringLiteral("unacked"), true);
-    const int statesBeforeChannelFour = stateChangeCount;
-    const int confirmationsBeforeChannelFour = fireConfirmationRequests.size();
-    if (!deliverMqtt(QStringLiteral("parking/fire/ch04"),
-                     channelFourState, true)) return 192;
-    if (!controller.state().fireChannels.contains(QStringLiteral("CH4"))
-        || stateChangeCount != statesBeforeChannelFour + 1
-        || fireConfirmationRequests.size() != confirmationsBeforeChannelFour + 1
-        || notifications.hasNotifications()) return 193;
-
-    const QByteArray channelFourEvent = revisionedFirePayload(
-        QStringLiteral("ch04"), QStringLiteral("fire-ch4-open-1"),
-        QStringLiteral("event-ch4-open-1"), QStringLiteral("alarm-ch4-a"),
-        1, QStringLiteral("FIRE_SUSPECTED"),
-        QStringLiteral("FIRE_SUSPECTED"), QStringLiteral("OPEN"),
-        QStringLiteral("unacked"), true);
-    const int statesBeforeChannelFourHistory = stateChangeCount;
-    const int confirmationsBeforeChannelFourHistory = fireConfirmationRequests.size();
-    const int notificationsBeforeChannelFourHistory = notificationChangeCount;
-    if (!deliverMqtt(QStringLiteral("parking/v1/events/ch04"),
-                     channelFourEvent, false)) return 194;
-    if (stateChangeCount != statesBeforeChannelFourHistory
-        || fireConfirmationRequests.size() != confirmationsBeforeChannelFourHistory
-        || notificationChangeCount != notificationsBeforeChannelFourHistory + 1
-        || notifications.notifications().size() != 1
-        || notifications.notifications().constFirst().eventId
-            != QStringLiteral("fire-ch4-open-1")) return 195;
-    const int eventsAfterChannelFourHistory = events.size();
-    if (!deliverMqtt(QStringLiteral("parking/v1/events/ch04"),
-                     channelFourEvent, false)) return 196;
-    if (events.size() != eventsAfterChannelFourHistory
-        || stateChangeCount != statesBeforeChannelFourHistory
-        || notificationChangeCount != notificationsBeforeChannelFourHistory + 1) {
-        return 197;
-    }
-
-    const QByteArray changedChannelFourDelivery = revisionedFirePayload(
-        QStringLiteral("ch04"), QStringLiteral("fire-ch4-open-1"),
-        QStringLiteral("event-ch4-open-other"), QStringLiteral("alarm-ch4-a"),
-        1, QStringLiteral("FIRE_SUSPECTED"),
-        QStringLiteral("FIRE_SUSPECTED"), QStringLiteral("OPEN"),
-        QStringLiteral("unacked"), true);
-    if (!deliverMqtt(QStringLiteral("parking/v1/events/ch04"),
-                     changedChannelFourDelivery, false)) return 198;
-    if (stateChangeCount != statesBeforeChannelFourHistory
-        || notificationChangeCount != notificationsBeforeChannelFourHistory + 1
-        || fireConfirmationRequests.size() != confirmationsBeforeChannelFourHistory
-        || events.constLast().eventType
-            != QStringLiteral("MQTT_FIRE_CONTRACT_ERROR")) return 199;
-
-    constexpr quint64 kMaximumExactFireRevision = 9007199254740991ULL;
-    const QByteArray maximumRevisionClearState = revisionedFirePayload(
-        QStringLiteral("ch04"), QStringLiteral("fire-ch4-clear-max"),
-        QStringLiteral("state-ch4-clear-max"), QStringLiteral("alarm-ch4-a"),
-        kMaximumExactFireRevision, QStringLiteral("FIRE_CLEARED"),
-        QStringLiteral("NONE"), QStringLiteral("RESOLVED"),
-        QStringLiteral("resolved"), false);
-    if (!deliverMqtt(QStringLiteral("parking/fire/ch04"),
-                     maximumRevisionClearState, true)) return 204;
-    if (controller.state().fireChannels.contains(QStringLiteral("CH4"))) return 205;
-    const int statesAfterMaximumRevision = stateChangeCount;
-    const QByteArray maximumRevisionClearEvent = revisionedFirePayload(
-        QStringLiteral("ch04"), QStringLiteral("fire-ch4-clear-max"),
-        QStringLiteral("event-ch4-clear-max"), QStringLiteral("alarm-ch4-a"),
-        kMaximumExactFireRevision, QStringLiteral("FIRE_CLEARED"),
-        QStringLiteral("NONE"), QStringLiteral("RESOLVED"),
-        QStringLiteral("resolved"), false);
-    if (!deliverMqtt(QStringLiteral("parking/v1/events/ch04"),
-                     maximumRevisionClearEvent, false)) return 206;
-    if (stateChangeCount != statesAfterMaximumRevision
-        || notifications.hasNotifications()) return 207;
 
     return 0;
 }

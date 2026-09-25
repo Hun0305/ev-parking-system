@@ -10,7 +10,6 @@
 #include <queue>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
 namespace parking_timer {
@@ -50,23 +49,11 @@ public:
     TimerManager(const TimerManager&) = delete;
     TimerManager& operator=(const TimerManager&) = delete;
 
-    /** @brief Starts the deadline worker after the runtime teardown guard exists. */
-    [[nodiscard]] bool start() noexcept;
-
-    /** @brief Stops and joins the deadline worker. Safe to call repeatedly. */
-    void stop() noexcept;
-
     /** @brief 불변 session ID의 위반 deadline을 큐에 등록하고 worker를 깨운다. */
     void schedule(std::int64_t log_id,
                   std::string slot_id,
                   std::string car_number,
                   std::chrono::milliseconds delay);
-
-    /** @brief 기존 세션 deadline을 무효화하고 새 기준시간으로 교체한다. */
-    void reschedule(std::int64_t log_id,
-                    std::string slot_id,
-                    std::string car_number,
-                    std::chrono::milliseconds delay);
 
     /** @brief 아직 worker가 소비하지 않은 큐 항목 수를 반환한다. */
     std::size_t pendingCount() const;
@@ -77,7 +64,6 @@ private:
     struct TimerItem {
         Clock::time_point deadline;
         std::uint64_t sequence{};
-        std::uint64_t generation{};
         std::int64_t log_id{};
         std::string slot_id;
         std::string car_number;
@@ -96,22 +82,17 @@ private:
     void retryAfterDatabaseError(TimerItem item, std::string message) noexcept;
     void retryAfterEvidencePending(TimerItem item) noexcept;
     void reportError(const TimerItem& item, std::string message) noexcept;
-    void scheduleImpl(std::int64_t log_id, std::string slot_id,
-                      std::string car_number, std::chrono::milliseconds delay);
-    [[nodiscard]] bool isCurrent(const TimerItem& item) const;
 
     EventDatabase& database_;
     ViolationCallback callback_;
     ErrorCallback error_callback_;
     EvidenceProvider evidence_provider_;
     std::mutex* transition_mutex_{};
-    std::mutex lifecycle_mutex_;
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::priority_queue<TimerItem, std::vector<TimerItem>, LaterDeadline> queue_;
     bool stopping_{};
     std::uint64_t next_sequence_{};
-    std::unordered_map<std::int64_t, std::uint64_t> generations_;
     // 반드시 모든 worker 상태 멤버보다 뒤에 선언하고 ctor body에서 시작한다.
     std::thread worker_;
 };

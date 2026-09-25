@@ -1,9 +1,5 @@
 #pragma once
 
-#include "event/FirePersistence.hpp"
-#include "parking/ParkingCorrelation.hpp"
-#include "parking/SlotTransitionTypes.hpp"
-#include "snapshot/NormalizedRoi.hpp"
 #include "parking_timer/Types.hpp"
 
 #include <cstdint>
@@ -12,12 +8,10 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
 struct sqlite3;
-struct sqlite3_stmt;
 
 namespace database {
 
@@ -37,8 +31,6 @@ struct EventRecord {
     std::string raw_payload;
     std::string payload_json;
     std::string created_at;
-    snapshot::NormalizedRoi applied_roi{};
-    std::uint64_t roi_revision{};
 };
 
 /** @brief HTTP API가 사용하는 주차면과 현재 활성 세션의 읽기 모델이다. */
@@ -64,58 +56,6 @@ struct ImageView {
     std::string evidence_reason;
     std::string ocr_result;
     std::string captured_at;
-    std::optional<snapshot::NormalizedRoi> applied_roi;
-    std::uint64_t roi_revision{};
-};
-
-/** @brief 앱 로그인 계정의 인증 및 관리용 DB 레코드다. */
-struct AppUserRecord {
-    std::int64_t user_id{-1};
-    std::string account_id;
-    std::string password_hash;
-    std::string display_name;
-    bool enabled{};
-    std::int64_t created_at_utc{};
-    std::int64_t updated_at_utc{};
-};
-
-/** @brief 유효한 Bearer 세션과 사용자를 조인한 인증 결과다. */
-struct AppSessionPrincipal {
-    std::int64_t user_id{-1};
-    std::string account_id;
-    std::string display_name;
-    std::int64_t expires_at_utc{};
-};
-
-/** @brief 한 입구 이미지에서 얻은 EV 사전 판별 결과다. */
-struct EntranceVisionAnalysis {
-    std::optional<bool> is_ev;
-    std::string decision;
-    std::string reason;
-    std::string model_version;
-    double processing_ms{};
-    std::string result_path;
-    std::string error;
-};
-
-/** 주차면 OCR 관측값을 입구 차량 기준 데이터에 연결한 결과다. */
-struct ParkingPlateResolution {
-    bool persisted{};
-    std::string observed_plate;
-    std::string canonical_plate;
-    std::string classification{"OCR_FAILED"};
-    std::string source{"UNRESOLVED"};
-    double match_score{};
-    std::int64_t entrance_event_id{-1};
-    std::int64_t vehicle_id{-1};
-};
-
-/** 판정이 끝나 파일 정리가 가능한 입구 이벤트의 경로 정보다. */
-struct EntranceArtifactRecord {
-    std::int64_t event_id{-1};
-    std::string terminal_state;
-    std::string plate_image_path;
-    std::string vision_result_path;
 };
 
 enum class EvidenceInsertResult {
@@ -140,8 +80,6 @@ public:
     bool open(const std::string& db_path);
     /** @brief 열린 DB 연결을 닫는다. */
     void close();
-    [[nodiscard]] bool runtimeSchemaReady() const noexcept;
-    [[nodiscard]] bool occupancySchemaReady() const noexcept;
     /** @brief 정규화된 카메라 이벤트와 선택적 Snapshot을 IMAGE_LOG/EVENT_LOG에 기록한다. */
     bool insertEvent(const EventRecord& record);
     /** @brief 센서·통신 운영 이벤트를 기존 EVENT_LOG schema에 저장한다. */
@@ -175,12 +113,6 @@ public:
                               const std::string& image_path,
                               const std::string& plate_number,
                               double confidence);
-    /** 주차면 OCR 원문을 보존하고 최근 입구 OCR과 보수적으로 연결한다. */
-    ParkingPlateResolution applyPlateOcrWithEntrance(
-        int session_id, const std::string& slot_id,
-        const std::string& image_path, const std::string& plate_number,
-        double confidence, std::int64_t entrance_match_window_ms,
-        double entrance_min_confidence);
     /** @brief 전체 주차면과 활성 세션을 조회한다. */
     bool listParkingSlots(std::vector<ParkingSlotView>& rows);
     /** @brief slot_id 한 건의 상태를 조회한다. */
@@ -191,155 +123,6 @@ public:
     bool getImage(int image_id, ImageView& row);
     /** @brief 파일 삭제가 끝난 조기 출차 세션의 IMAGE_LOG 행을 모두 제거한다. */
     bool deleteSessionImageRecords(int session_id);
-
-    /** @brief 정규화된 account ID로 앱 사용자를 조회한다. */
-    std::optional<AppUserRecord> findAppUser(
-        const std::string& account_id) const;
-    /** @brief Argon2id PHC 문자열을 가진 앱 사용자를 생성한다. */
-    bool createAppUser(const std::string& account_id,
-                       const std::string& password_hash,
-                       const std::string& display_name,
-                       std::int64_t now_utc,
-                       std::int64_t* user_id);
-    /** @brief 비밀번호 해시를 제외한 앱 사용자 목록을 반환한다. */
-    std::vector<AppUserRecord> listAppUsers() const;
-    /** @brief 계정 활성 상태를 변경하며 비활성화 시 세션을 모두 폐기한다. */
-    bool setAppUserEnabled(const std::string& account_id,
-                           bool enabled,
-                           std::int64_t now_utc);
-    /** @brief 비밀번호를 교체하고 해당 사용자의 세션을 모두 폐기한다. */
-    bool resetAppUserPassword(const std::string& account_id,
-                              const std::string& password_hash,
-                              std::int64_t now_utc);
-    /** @brief 원문 토큰이 아닌 SHA-256 digest로 로그인 세션을 만든다. */
-    bool createAppSession(std::int64_t user_id,
-                          const std::vector<unsigned char>& token_hash,
-                          std::int64_t created_at_utc,
-                          std::int64_t expires_at_utc);
-    /** @brief digest와 현재 시각으로 활성 세션을 검증한다. */
-    std::optional<AppSessionPrincipal> findActiveAppSession(
-        const std::vector<unsigned char>& token_hash,
-        std::int64_t now_utc) const;
-    /** @brief 현재 토큰 하나만 폐기한다. */
-    bool revokeAppSession(const std::vector<unsigned char>& token_hash,
-                          std::int64_t now_utc);
-
-    /** 주차 세션과 독립된 CH2 입구 인식 객체를 생성한다. */
-    std::int64_t createEntranceRecognition(const std::string& camera_id,
-                                           const std::string& channel_id,
-                                           const std::string& object_id,
-                                           std::int64_t first_seen_epoch_ms);
-    /** 입구 객체의 vehicle 또는 plate 이미지 경로를 연결한다. */
-    bool updateEntranceImage(std::int64_t event_id, bool plate,
-                             const std::string& image_path);
-    /** Python worker의 EV 아이콘 판별과 감사 경로를 입구 이벤트에 저장한다. */
-    bool updateEntranceVisionAnalysis(std::int64_t event_id,
-                                      const EntranceVisionAnalysis& analysis);
-    /** OCR 번호판과 아이콘 판정을 VEHICLE에 원자적으로 확정한다. */
-    std::string finishEntranceRecognition(std::int64_t event_id,
-                                          const std::string& plate_number,
-                                          double confidence,
-                                          int attempts,
-                                          const std::string& error);
-    /** 다른 ObjectId로 반복된 같은 입구 이미지 수를 원본 이벤트에 누적한다. */
-    bool incrementEntranceDuplicateCount(std::int64_t event_id);
-    /** 삭제 완료된 입구 이벤트의 파일 경로를 비우고 결과 DB만 남긴다. */
-    bool markEntranceArtifactsDeleted(std::int64_t event_id);
-    /** 성공 건과 보존기간이 지난 실패 건의 삭제 대상 경로를 조회한다. */
-    std::vector<EntranceArtifactRecord> listEntranceArtifactsForCleanup(
-        std::int64_t failed_before_epoch_ms) const;
-
-    /** @brief 런타임 설정 문자열을 조회한다. 키가 없으면 nullopt를 반환한다. */
-    std::optional<std::string> getSystemSetting(const std::string& key) const;
-    /** @brief 런타임 설정을 원자적으로 추가하거나 갱신한다. */
-    bool upsertSystemSetting(const std::string& key, const std::string& value);
-
-    /** Atomically creates or validates the complete configured Fire topology. */
-    event::FireStoreMutationResult initializeFireTopology(
-        const std::vector<event::FireChannelBootstrap>& topology);
-    /** Compare-and-swap state mutation plus zero or two Fire delivery intents. */
-    event::FireStoreMutationResult applyFireStateMutation(
-        const event::FireStateMutation& mutation);
-    std::optional<event::FireAlarmStateRecord> getFireAlarmState(
-        const std::string& channel_id) const;
-    std::vector<event::FireAlarmStateRecord> listFireAlarmStates() const;
-    std::optional<event::FireOutboxRecord> getFireDelivery(
-        const std::string& delivery_key) const;
-    std::vector<event::FireOutboxRecord> listFireRetainedDeliveries() const;
-    std::vector<event::FireOutboxRecord> listFireLifecycleDeliveries() const;
-    std::vector<event::FireOutboxRecord> listPendingFireLifecycleDeliveries(
-        const std::optional<std::string>& channel_id = std::nullopt) const;
-    bool markFireDeliveryInFlight(const std::string& delivery_key,
-                                  std::uint64_t fire_revision);
-    bool markFireDeliveryPending(const std::string& delivery_key,
-                                 std::uint64_t fire_revision,
-                                 const std::string& error);
-    bool acknowledgeFireDelivery(const std::string& delivery_key,
-                                 std::uint64_t fire_revision);
-    bool resetFireInFlightDeliveries();
-    [[nodiscard]] bool isSensorBootIdRetired(
-        const std::string& source_kind,
-        const std::string& sensor_id,
-        const std::string& boot_id) const;
-
-    parking::SlotAdmissionResult admitSlotTransitionCommand(
-        const parking::SlotTransitionCommand& command,
-        std::size_t pending_capacity);
-    std::size_t admitDueSlotDeadlines(
-        std::int64_t now_epoch_ms,
-        std::size_t pending_capacity,
-        const std::vector<std::string>& blocked_slots = {});
-    std::vector<parking::DurableSlotCommand>
-    listRunnableSlotTransitionCommands(std::int64_t now_epoch_ms) const;
-    parking::CommittedOccupancyTransition applySlotTransitionCommand(
-        const std::string& command_id);
-    std::vector<parking::CommittedOccupancyTransition>
-    listPendingSlotTransitionEffects(std::int64_t now_epoch_ms) const;
-    bool completeSlotTransitionEffects(const std::string& command_id);
-    bool deferSlotTransitionEffects(const std::string& command_id,
-                                    std::int64_t next_attempt_at_epoch_ms,
-                                    const std::string& error) noexcept;
-    bool deferSlotTransitionCommand(const std::string& command_id,
-                                    std::int64_t next_attempt_at_epoch_ms,
-                                    const std::string& error) noexcept;
-    std::optional<std::int64_t> nextScheduledSlotDeadlineEpochMs() const;
-    std::size_t pendingSlotTransitionCommandCount() const;
-    std::size_t pendingSlotTransitionEffectCount() const;
-    std::size_t pendingSlotTransitionDrainCount(
-        std::int64_t shutdown_cutoff_epoch_ms) const;
-    /**
-     * @brief 보존 기간이 지난 종결 상태 INBOX 행을 한 배치만큼 삭제한다.
-     *
-     * `status='APPLIED'`이고 효과까지 끝난(`effect_state IN ('NONE','APPLIED')`)
-     * 행만 지운다. 진행 중이거나 재시도 대기 중인 행은 대상이 아니다.
-     *
-     * @param[in] created_before_epoch_ms 이 시각 이전 생성분만 삭제한다.
-     * @param[in] batch_limit 1회 호출에서 지울 최대 행 수. 잠금 보유 시간을
-     *            제한하기 위한 상한이며, 0이면 아무것도 하지 않는다.
-     * @return 실제로 삭제된 행 수.
-     *
-     * @note 홀 센서 재생(replay) 방어는 이 테이블이 아니라
-     *       `OCCUPANCY_SENSOR_SEQUENCE_STATE`와 `SENSOR_RETIRED_BOOT_ID`가
-     *       담당하므로, 오래된 행을 지워도 중복 수용이 발생하지 않는다.
-     * @note 가장 최근 행은 절대 삭제되지 않으므로
-     *       `MAX(admission_ordinal)` 기반 채번은 영향을 받지 않는다.
-     */
-    std::size_t purgeSettledSlotTransitionCommands(
-        std::int64_t created_before_epoch_ms,
-        std::size_t batch_limit) noexcept;
-
-    parking::ParkingCorrelationMatch resolveParkingCorrelation(
-        const std::string& camera_id,
-        const std::string& channel_id,
-        const std::string& object_id,
-        std::int64_t now_epoch_ms) const;
-    parking::BestShotAttachResult attachBestShotIfActive(
-        const parking::CommittedCorrelationLease& lease,
-        parking::BestShotEvidenceKind kind,
-        const std::string& image_ref,
-        const std::string& image_path,
-        const std::string& plate_text,
-        std::int64_t now_epoch_ms);
 
     /** @brief 서버 시작 시 운영 DB에 안전한 멱등 migration만 적용한다. */
     void migrateRuntimeSchema();
@@ -352,10 +135,7 @@ public:
         std::int64_t session_id,
         const std::string& original_path,
         const std::string& evidence_reason,
-        const std::string& captured_at,
-        const std::string& enhanced_path = {},
-        snapshot::NormalizedRoi applied_roi = {},
-        std::uint64_t roi_revision = 0);
+        const std::string& captured_at);
     /** @brief 이미 저장된 세션 증거 이미지 경로를 조회한다. */
     std::optional<std::string> findEvidenceImagePath(
         std::int64_t session_id,
@@ -366,9 +146,7 @@ public:
         const std::string& original_path,
         const std::string& enhanced_path,
         const std::string& enhancement_type,
-        const std::string& captured_at,
-        snapshot::NormalizedRoi applied_roi = {},
-        std::uint64_t roi_revision = 0);
+        const std::string& captured_at);
     /** @brief OCR 시도 소진을 UNKNOWN으로 한 번만 EVENT_LOG에 기록한다. */
     bool markPlateOcrUnresolved(std::int64_t session_id,
                                 const std::string& slot_id,
@@ -377,9 +155,9 @@ public:
     /** @brief schema와 seed SQL을 적용하며 구형 컬럼을 먼저 호환 마이그레이션한다. */
     void initialize(const std::filesystem::path& schema_file,
                     const std::filesystem::path& seed_file);
-    /** @brief VEHICLE의 is_ev로 차량 종류를 분류한다. */
+    /** @brief VEHICLE의 is_ev/is_phev로 차량 종류를 분류한다. */
     parking_timer::VehicleCategory classifyVehicle(std::string_view car_number) const;
-    /** @brief EV 장기 점유용 ACTIVE 세션과 최초 이미지를 트랜잭션으로 생성한다. */
+    /** @brief EV/PHEV 장기 점유용 ACTIVE 세션과 최초 이미지를 트랜잭션으로 생성한다. */
     std::int64_t insertParked(const std::string& car_number,
                               const std::string& slot_id,
                               const std::string& parked_at,
@@ -399,54 +177,19 @@ public:
     std::optional<parking_timer::LogRecord> findLogById(std::int64_t log_id) const;
     /** @brief 타이머 CLI 표시용 전체 세션을 생성 순서로 반환한다. */
     std::vector<parking_timer::LogRecord> listLogs() const;
-    /** @brief 차량번호와 EV/NON_EV 문자열 목록을 반환한다. */
+    /** @brief 차량번호와 EV/PHEV/NON_EV 문자열 목록을 반환한다. */
     std::vector<std::pair<std::string, std::string>> listVehicles() const;
     /** @brief TIMER_ENTRY로 식별되는 데모 타이머 세션만 정리한다. */
     void clearTimerLogs();
 
 private:
     void executeSqlUnlocked(const std::string& sql);
-    /**
-     * @brief 연결 단위 PRAGMA(busy_timeout/WAL/통계/캐시)를 적용한다.
-     *
-     * @note `db_mutex_`를 이미 보유한 상태에서만 호출한다.
-     * @note 실패해도 예외를 던지지 않는다. 모두 성능·동시성 튜닝이라
-     *       DB 열기 자체를 실패시킬 이유가 없다. 대신 로그를 남긴다.
-     */
-    void applyConnectionPragmasUnlocked() noexcept;
-    /**
-     * @brief 반복 실행되는 SQL의 prepared statement를 캐시해 재사용한다.
-     *
-     * 액터 폴링 루프는 같은 SQL을 초당 수십 회 실행한다. 매번
-     * `sqlite3_prepare_v2`로 재파싱하면 그 비용이 쿼리 실행 자체를 넘어선다
-     * (측정: 조치 후 CPU의 51.90%). 근거는
-     * docs/PERFORMANCE_PROFILING_REPORT_1H.md 참고.
-     *
-     * @param[in] sql 캐시 키로 쓰이는 SQL 문자열. 정적 리터럴이어야 한다.
-     * @return 호출자가 소유하지 않는 statement. 반환 전에 reset/clear된다.
-     * @throws std::runtime_error prepare에 실패한 경우.
-     *
-     * @note `db_mutex_`를 이미 보유한 상태에서만 호출한다. 이 뮤텍스가 모든
-     *       DB 접근을 직렬화하므로 캐시된 statement가 동시에 사용되지 않는다.
-     */
-    sqlite3_stmt* cachedStatementUnlocked(std::string_view sql) const;
-    /** @brief 캐시된 statement를 모두 finalize한다. 연결을 닫기 전에 부른다. */
-    void clearStatementCacheUnlocked() noexcept;
     static std::string readTextFile(const std::filesystem::path& path);
 
     bool opened_;
-    bool runtime_schema_ready_{};
-    bool occupancy_schema_ready_{};
     std::string db_path_;
     mutable std::mutex db_mutex_;
     sqlite3* db_{};
-    /**
-     * @brief SQL 문자열 -> 재사용 중인 prepared statement.
-     *
-     * 논리적으로는 메모이제이션이라 const 조회 경로에서도 채워진다.
-     * `db_mutex_`가 접근을 직렬화한다.
-     */
-    mutable std::unordered_map<std::string, sqlite3_stmt*> statement_cache_;
 };
 
 }

@@ -1,15 +1,16 @@
 #pragma once
 
 #include "parking/ParkingSensorEvent.hpp"
-#include "sensor/SensorSequencePolicy.hpp"
 
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 
 namespace parking {
 
-// In-memory wrapper used by the legacy parking-domain worker.  Production Hall
-// commits the same SensorSequencePolicy together with its durable transition.
+// Rejects duplicate or delayed packets when the transport supplies a
+// monotonically increasing sequence number. Events without a sequence are
+// accepted so the same domain pipeline can be used during early tests.
 class ParkingSensorSequenceGuard {
 public:
     [[nodiscard]] bool accept(
@@ -20,8 +21,7 @@ public:
     void clear();
 
 private:
-    std::unordered_map<std::string, sensor::SensorSequenceState>
-        stateBySensor_;
+    std::unordered_map<std::string, std::uint64_t> lastBySensor_;
 };
 
 }  // namespace parking

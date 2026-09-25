@@ -1,9 +1,7 @@
 # Local credentials and generated databases
-# .env.public 은 공개 설정이라 커밋한다. 계정/키는 .env.private 에만 둔다.
-.env.private
-# 구 구조의 로컬 파일들(EVDA-203 이후 미사용). 자격증명이 남아있을 수 있어
-# 실수로 커밋되지 않도록 계속 무시한다.
-.env.*.local
+.env.camera.local
+.env.gemini.local
+.env.iva.local
 
 data/db/parking.db
 data/db/test_*.db
@@ -12,8 +10,6 @@ data/db/backups/*.db
 *.sqlite3
 *.sqlite3-shm
 *.sqlite3-wal
-*.db-shm
-*.db-wal
 build/
 cmake-build/
 docs/generated/*.tmp
@@ -28,17 +24,6 @@ docs/generated/*.tmp
 Module.symvers
 modules.order
 .tmp_versions/
-data/snapshots/**
-!data/snapshots/**/
-!data/snapshots/**/.gitkeep
+data/snapshots/
 data/bestshots/
-data/fullframes/
-data/tls/
 *.log
-.venv-cv/
-__pycache__/
-*.py[cod]
-/low_quality_presence_v1.zip
-data/entrance/**
-!data/entrance/**/
-!data/entrance/**/.gitkeep

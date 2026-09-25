@@ -1,7 +1,6 @@
 #pragma once
 
 #include "camera/CameraChannel.hpp"
-#include "snapshot/NormalizedRoi.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -10,6 +9,13 @@
 #include <vector>
 
 namespace snapshot {
+
+struct NormalizedRoi {
+    double x;
+    double y;
+    double width;
+    double height;
+};
 
 struct StoredImagePair {
     std::string originalPath;
@@ -28,7 +34,7 @@ public:
         const std::shared_ptr<camera::CameraChannel>& channel
     );
 
-    // 세션 없는 IVA 진단 ROI를 snapshots/<channel>/<slot>/events/iva에 저장한다.
+    // 최신 원본 프레임에서 IVA ROI를 잘라 snapshots/<channel>/<slot>/scene에 저장한다.
     std::string saveIvaAreaSnapshot(
         const std::shared_ptr<camera::CameraChannel>& channel,
         const std::string& slot_id,
@@ -53,22 +59,12 @@ public:
         const NormalizedRoi& roi
     );
 
-    /** @brief 카메라 CAP original/enhanced JPEG를 같은 슬롯 ROI로 잘라 저장한다. */
+    /** @brief 카메라 CAP에서 받은 original/enhanced JPEG를 원자적으로 저장한다. */
     StoredImagePair saveCameraApiHallCapture(
         const std::string& channel_id,
         std::int64_t session_id,
         const std::string& slot_id,
         const std::string& capture_stage,
-        const NormalizedRoi& roi,
-        const std::vector<unsigned char>& original_jpeg,
-        const std::vector<unsigned char>& enhanced_jpeg
-    );
-
-    /** @brief 세션이 없는 IVA 이벤트의 original/enhanced JPEG를 ROI로 잘라 저장한다. */
-    StoredImagePair saveCameraApiIvaSnapshot(
-        const std::string& channel_id,
-        const std::string& slot_id,
-        const NormalizedRoi& roi,
         const std::vector<unsigned char>& original_jpeg,
         const std::vector<unsigned char>& enhanced_jpeg
     );
@@ -78,9 +74,7 @@ private:
         const std::shared_ptr<camera::CameraChannel>& channel,
         const std::string& slot_id,
         const NormalizedRoi& roi,
-        const std::string& filename_prefix,
-        std::int64_t session_id = -1,
-        const std::string& stage_directory = {});
+        const std::string& filename_prefix);
     cv::Mat waitForFullFrame(const std::shared_ptr<camera::CameraChannel>& channel);
     std::string snapshot_dir_;
     int snapshot_frame_wait_ms_;

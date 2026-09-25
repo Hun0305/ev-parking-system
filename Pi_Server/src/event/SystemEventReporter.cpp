@@ -91,7 +91,7 @@ SystemEventReporter::SystemEventReporter(Sink sink, Config config)
 }
 
 SystemEventReporter::~SystemEventReporter() {
-    if (!stop()) std::terminate();
+    stop();
 }
 
 bool SystemEventReporter::start() {
@@ -112,22 +112,19 @@ bool SystemEventReporter::start() {
     return false;
 }
 
-bool SystemEventReporter::stop() noexcept {
-    std::lock_guard stop_lock(stop_mutex_);
+void SystemEventReporter::stop() noexcept {
     try {
         {
             std::lock_guard lock(mutex_);
-            if (!running_ && !worker_.joinable()) return true;
+            if (!running_ && !worker_.joinable()) return;
             stopping_ = true;
         }
         condition_.notify_all();
         if (worker_.joinable()) worker_.join();
         std::lock_guard lock(mutex_);
         running_ = false;
-        return true;
     } catch (...) {
         util::logError("System event reporter stop failed");
-        return false;
     }
 }
 

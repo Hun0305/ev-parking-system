@@ -1,19 +1,14 @@
 #include "parkingcontroller.h"
 
-
+#include "adapters/incomingmessageadapter.h"
 #include "adapters/serverfireeventadapter.h"
 #include "adapters/serverparkingeventadapter.h"
 #include "api/apiclient.h"
 #include "api/imageloader.h"
-#include "api/parkingroi.h"
 #include "api/parkingresponseparser.h"
-#include "api/urlorigin.h"
 #include "services/mqttserviceclient.h"
 
 #include <QDateTime>
-#include <QDebug>
-#include <QDir>
-#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
@@ -22,32 +17,10 @@
 #include <QTimer>
 #include <QUuid>
 
-#include <algorithm>
-
 namespace {
 constexpr int kSeenServerEventLimit = 256;
-constexpr int kEventEvidenceReferenceLimit = 512;
 constexpr int kPortableMqttClientIdMaxLength = 23;
 constexpr int kGeneratedMqttClientIdSuffixLength = 12;
-constexpr int kMinimumOverstayThresholdSeconds = 60;
-constexpr int kMaximumOverstayThresholdSeconds = 86400;
-
-bool isParkingRoiZoneId(const QString &slotId)
-{
-    static const QRegularExpression pattern(
-        QStringLiteral("^(?:EV|P)-(\\d+)$"));
-    const QRegularExpressionMatch match = pattern.match(slotId);
-    return match.hasMatch() && match.captured(1).toInt() > 0;
-}
-
-QString parkingRoiTag(const QString &kind, quint64 generation,
-                      const QString &slotId = QString(),
-                      bool appliedImmediately = false)
-{
-    return QStringLiteral("parking-roi|%1|%2|%3|%4")
-        .arg(kind).arg(generation).arg(slotId)
-        .arg(appliedImmediately ? 1 : 0);
-}
 
 QString generatedMqttClientId(QString prefix)
 {
@@ -75,18 +48,6 @@ bool isGeneralSlotId(const QString &slotId)
     return slotId.startsWith(QStringLiteral("P-"));
 }
 
-bool isEvidenceSlotId(const QString &slotId)
-{
-    static const QRegularExpression pattern(
-        QStringLiteral("^(?:EV|P)-[0-9]+$"));
-    return pattern.match(slotId).hasMatch();
-}
-
-QString eventEvidenceRequestTag(quint64 sequence)
-{
-    return QStringLiteral("event-evidence|%1").arg(sequence);
-}
-
 QString normalizeCameraChannelId(const QString &rawChannelId)
 {
     QString normalized = rawChannelId.trimmed().toUpper();
@@ -103,40 +64,6 @@ QString normalizeCameraChannelId(const QString &rawChannelId)
 QString fireAckCommandKey(const QString &channelId, const QString &alarmId)
 {
     return channelId + QLatin1Char('|') + alarmId;
-}
-
-QString fireDeliverySinkKey(const QString &topic, const bool retained)
-{
-    if (topic.startsWith(QStringLiteral("parking/fire/"))) {
-        return QStringLiteral("RETAINED_STATE");
-    }
-    if (topic.startsWith(QStringLiteral("parking/v1/events/"))) {
-        return QStringLiteral("LIFECYCLE_EVENT");
-    }
-    return retained ? QStringLiteral("RETAINED_STATE")
-                    : QStringLiteral("MANUAL_OR_EVENT");
-}
-
-bool isFireStateOnlyDelivery(const QString &topic, const bool retained)
-{
-    return retained || topic.startsWith(QStringLiteral("parking/fire/"));
-}
-
-QByteArray fireStateFingerprint(const ServerFireEvent &event)
-{
-    QJsonObject identity;
-    identity.insert(QStringLiteral("event_id"), event.eventId);
-    identity.insert(QStringLiteral("alarm_id"), event.alarmId);
-    identity.insert(QStringLiteral("action"), static_cast<int>(event.action));
-    identity.insert(QStringLiteral("event_type"), event.eventType);
-    identity.insert(QStringLiteral("channel_id"), event.channelId);
-    identity.insert(QStringLiteral("source_id"), event.sourceId);
-    identity.insert(QStringLiteral("alarm_kind"), event.alarmKind);
-    identity.insert(QStringLiteral("alarm_state"), event.alarmState);
-    identity.insert(QStringLiteral("ack_state"), event.ackState);
-    identity.insert(QStringLiteral("active_present"), event.activePresent);
-    identity.insert(QStringLiteral("active"), event.active);
-    return QJsonDocument(identity).toJson(QJsonDocument::Compact);
 }
 
 bool isFireLifecycleEventType(const QString &rawEventType)
@@ -215,57 +142,6 @@ EventSeverity severityFromText(const QString &severity)
     return EventSeverity::Unknown;
 }
 
-bool parseOverstayThreshold(const QJsonDocument &document,
-                            bool requireSuccess,
-                            int &seconds,
-                            QString &applyPolicy,
-                            QString &errorMessage)
-{
-    if (!document.isObject()) {
-        errorMessage = QStringLiteral("The server returned an invalid JSON object.");
-        return false;
-    }
-
-    const QJsonObject object = document.object();
-    const QJsonValue successValue = object.value(QStringLiteral("success"));
-    if (requireSuccess
-        && (!successValue.isBool() || !successValue.toBool())) {
-        errorMessage = object.value(QStringLiteral("error")).toString().trimmed();
-        if (errorMessage.isEmpty()) {
-            errorMessage = QStringLiteral("The server did not confirm the update.");
-        }
-        return false;
-    }
-    if (successValue.isBool() && !successValue.toBool()) {
-        errorMessage = object.value(QStringLiteral("error")).toString().trimmed();
-        if (errorMessage.isEmpty()) {
-            errorMessage = QStringLiteral("The server rejected the request.");
-        }
-        return false;
-    }
-
-    const QJsonValue thresholdValue = object.value(
-        QStringLiteral("thresholdSeconds"));
-    if (!thresholdValue.isDouble()) {
-        errorMessage = QStringLiteral("The response is missing thresholdSeconds.");
-        return false;
-    }
-    const double rawSeconds = thresholdValue.toDouble();
-    seconds = thresholdValue.toInt(-1);
-    if (rawSeconds != static_cast<double>(seconds)
-        || seconds < kMinimumOverstayThresholdSeconds
-        || seconds > kMaximumOverstayThresholdSeconds) {
-        errorMessage = QStringLiteral(
-            "The server returned an invalid thresholdSeconds value.");
-        return false;
-    }
-
-    applyPolicy = object.value(QStringLiteral("applyPolicy"))
-                      .toString().trimmed();
-    errorMessage.clear();
-    return true;
-}
-
 }
 
 ParkingController::ParkingController(const QString &sharedConfigPath,
@@ -279,17 +155,6 @@ ParkingController::ParkingController(const QString &sharedConfigPath,
     m_reconnectTimer->setSingleShot(true);
     connect(m_reconnectTimer, &QTimer::timeout,
             this, &ParkingController::reconnectNow);
-
-    QString mapperError;
-    const QDir configDir = QFileInfo(sharedConfigPath).absoluteDir();
-    const QString localMappingPath =
-        configDir.filePath(QStringLiteral("slot_mapping.local.json"));
-    if (QFileInfo::exists(localMappingPath)) {
-        if (!m_slotIdMapper.loadFromFile(localMappingPath, mapperError)) {
-            qWarning().noquote()
-                << QStringLiteral("Slot mapping disabled: %1").arg(mapperError);
-        }
-    }
 }
 
 void ParkingController::start()
@@ -328,10 +193,8 @@ void ParkingController::initializeMqttClient()
     const bool followApiHost =
         setting(QStringLiteral("mqtt/follow_api_host"), true).toBool();
     if (followApiHost) {
-        const QUrl apiUrl = m_hasAuthenticatedServerOverride
-            ? m_authenticatedServerOrigin
-            : QUrl(setting(QStringLiteral("api/base_url"), QString())
-                       .toString().trimmed());
+        const QUrl apiUrl(
+            setting(QStringLiteral("api/base_url"), QString()).toString().trimmed());
         if (apiUrl.isValid() && !apiUrl.host().isEmpty()) {
             mqttSettings.host = apiUrl.host();
         }
@@ -523,138 +386,10 @@ void ParkingController::handleMqttMessageWithMetadata(
                 QStringLiteral("REJECTED"));
 }
 
-ParkingController::FirePreflightResult ParkingController::preflightFireEvent(
-    const ServerFireEvent &event, const QString &topic, const bool retained)
-{
-    FirePreflightResult result;
-    const bool stateOnly = isFireStateOnlyDelivery(topic, retained);
-    auto existingLedger = m_fireRevisionLedgers.constFind(event.channelId);
-
-    if (!event.fireRevisionPresent) {
-        if (existingLedger != m_fireRevisionLedgers.cend()
-            && existingLedger->versionedSeen) {
-            result.errorMessage = QStringLiteral(
-                "revisionless fire payload rejected after v2 activation");
-            return result;
-        }
-
-        result.accepted = true;
-        result.applyState = true;
-        result.recordHistory = !stateOnly;
-        return result;
-    }
-
-    result.revisioned = true;
-    const QByteArray stateIdentity = fireStateFingerprint(event);
-    const QByteArray eventIdentity = QByteArray::number(event.fireRevision)
-        + QByteArray(1, '\x1f') + stateIdentity;
-    const QString sinkKey = fireDeliverySinkKey(topic, retained);
-    const QString deliveryKey = sinkKey + QChar(0x1f) + event.deliveryId
-        + QChar(0x1f) + QString::number(event.fireRevision);
-    const QByteArray deliveryIdentity = event.channelId.toUtf8()
-        + QByteArray(1, '\x1f') + QByteArray::number(event.fireRevision)
-        + QByteArray(1, '\x1f') + event.canonicalPayload;
-    const QByteArray registeredGlobalDelivery =
-        m_fireDeliveryFingerprints.value(deliveryKey);
-    if (!registeredGlobalDelivery.isEmpty()
-        && registeredGlobalDelivery != deliveryIdentity) {
-        result.errorMessage = QStringLiteral(
-            "same fire sink/delivery_id/revision carries a different payload");
-        return result;
-    }
-
-    if (existingLedger != m_fireRevisionLedgers.cend()
-        && existingLedger->versionedSeen) {
-        const QByteArray registeredEvent =
-            existingLedger->eventFingerprintById.value(event.eventId);
-        if (!registeredEvent.isEmpty() && registeredEvent != eventIdentity) {
-            result.errorMessage = QStringLiteral(
-                "same fire event_id carries a different revision or payload");
-            return result;
-        }
-
-        if (event.fireRevision < existingLedger->lastAppliedRevision) {
-            result.accepted = true;
-            return result;
-        }
-
-        if (event.fireRevision == existingLedger->lastAppliedRevision) {
-            if (existingLedger->stateFingerprint != stateIdentity) {
-                result.errorMessage = QStringLiteral(
-                    "same fire_revision carries a different lifecycle identity");
-                return result;
-            }
-
-            const QString registeredDeliveryId =
-                existingLedger->deliveryIdBySink.value(sinkKey);
-            if (!registeredDeliveryId.isEmpty()
-                && registeredDeliveryId != event.deliveryId) {
-                result.errorMessage = QStringLiteral(
-                    "same fire sink/revision carries a different delivery_id");
-                return result;
-            }
-
-            FireRevisionLedger &ledger = m_fireRevisionLedgers[event.channelId];
-            if (registeredDeliveryId.isEmpty()) {
-                ledger.deliveryIdBySink.insert(sinkKey, event.deliveryId);
-            }
-            if (registeredGlobalDelivery.isEmpty()) {
-                m_fireDeliveryFingerprints.insert(
-                    deliveryKey, deliveryIdentity);
-            }
-            result.accepted = true;
-            result.recordHistory = !stateOnly
-                && !ledger.lifecycleHistoryRecorded;
-            if (result.recordHistory) {
-                ledger.lifecycleHistoryRecorded = true;
-            }
-            return result;
-        }
-    }
-
-    FireRevisionLedger nextLedger;
-    if (existingLedger != m_fireRevisionLedgers.cend()) {
-        nextLedger.eventFingerprintById = existingLedger->eventFingerprintById;
-    }
-    nextLedger.versionedSeen = true;
-    nextLedger.lastAppliedRevision = event.fireRevision;
-    nextLedger.stateFingerprint = stateIdentity;
-    nextLedger.eventFingerprintById.insert(event.eventId, eventIdentity);
-    nextLedger.deliveryIdBySink.insert(sinkKey, event.deliveryId);
-    nextLedger.lifecycleHistoryRecorded = !stateOnly;
-    m_fireRevisionLedgers.insert(event.channelId, nextLedger);
-    if (registeredGlobalDelivery.isEmpty()) {
-        m_fireDeliveryFingerprints.insert(deliveryKey, deliveryIdentity);
-    }
-
-    result.accepted = true;
-    result.applyState = true;
-    result.recordHistory = !stateOnly;
-    return result;
-}
-
 void ParkingController::applyChannelFireEvent(const ServerFireEvent &event,
                                               const QString &topic,
                                               const bool retained)
 {
-    const FirePreflightResult preflight =
-        preflightFireEvent(event, topic, retained);
-    if (!preflight.accepted) {
-        recordEvent(
-            event.channelId.isEmpty() ? QStringLiteral("SYSTEM")
-                                      : event.channelId,
-            QStringLiteral("MQTT_FIRE_CONTRACT_ERROR"),
-            topic + QStringLiteral(": ") + preflight.errorMessage,
-            QStringLiteral("REJECTED"));
-        return;
-    }
-    if (!preflight.applyState) {
-        if (preflight.recordHistory) {
-            recordChannelFireEvent(event);
-        }
-        return;
-    }
-
     bool stateChanged = false;
     bool requestConfirmation = false;
     if (event.action == ServerFireEventAction::Activate) {
@@ -669,8 +404,7 @@ void ParkingController::applyChannelFireEvent(const ServerFireEvent &event,
                 fireAckCommandKey(event.channelId, previous.alarmId));
         }
         requestConfirmation = !previous.active
-            || previous.alarmId != event.alarmId
-            || (preflight.revisioned && previous.acknowledged);
+            || previous.alarmId != event.alarmId;
         ChannelFireAlarmState updated;
         updated.alarmId = event.alarmId;
         updated.alarmState = event.alarmState.isEmpty()
@@ -680,8 +414,7 @@ void ParkingController::applyChannelFireEvent(const ServerFireEvent &event,
         updated.active = true;
 
         // A repeated DETECTED for the same active alarm must never undo ACK.
-        if (!preflight.revisioned
-            && previous.active && previous.acknowledged
+        if (previous.active && previous.acknowledged
             && (event.alarmId.isEmpty()
                 || previous.alarmId == event.alarmId)) {
             updated = previous;
@@ -697,10 +430,8 @@ void ParkingController::applyChannelFireEvent(const ServerFireEvent &event,
     } else if (event.action == ServerFireEventAction::Acknowledge) {
         const ChannelFireAlarmState previous =
             m_state.fireAlarms.value(event.channelId);
-        if (!preflight.revisioned
-            && ((!retained && !previous.active)
-                || (previous.active
-                    && previous.alarmId != event.alarmId))) {
+        if ((!retained && !previous.active)
+            || (previous.active && previous.alarmId != event.alarmId)) {
             recordEvent(
                 event.channelId,
                 QStringLiteral("MQTT_FIRE_CONTRACT_ERROR"),
@@ -733,18 +464,13 @@ void ParkingController::applyChannelFireEvent(const ServerFireEvent &event,
     } else if (event.action == ServerFireEventAction::Clear) {
         const ChannelFireAlarmState previous =
             m_state.fireAlarms.value(event.channelId);
-        if (!preflight.revisioned
-            && previous.active && previous.alarmId != event.alarmId) {
+        if (previous.active && previous.alarmId != event.alarmId) {
             recordEvent(
                 event.channelId,
                 QStringLiteral("MQTT_FIRE_CONTRACT_ERROR"),
                 QStringLiteral("Rejected clear for mismatched alarm_id"),
                 QStringLiteral("REJECTED"));
             return;
-        }
-        if (!previous.alarmId.isEmpty()) {
-            m_fireAckCommandKeys.remove(
-                fireAckCommandKey(event.channelId, previous.alarmId));
         }
         m_fireAckCommandKeys.remove(
             fireAckCommandKey(event.channelId, event.alarmId));
@@ -764,7 +490,9 @@ void ParkingController::applyChannelFireEvent(const ServerFireEvent &event,
         emit fireConfirmationRequested(event.channelId, event.alarmId);
     }
 
-    if (preflight.recordHistory) {
+    const bool stateOnly = retained
+        || topic.startsWith(QStringLiteral("parking/fire/"));
+    if (!stateOnly || event.action != ServerFireEventAction::Activate) {
         recordChannelFireEvent(event);
     }
 }
@@ -870,8 +598,8 @@ bool ParkingController::applyServerParkingEvent(const QJsonObject &object,
         return true;
     }
 
-    const QString mappedSlotId = m_slotIdMapper.toZoneId(event.slotId);
-    if (mappedSlotId.isEmpty()) {
+    const QString slotId = normalizeParkingSlotId(event.slotId);
+    if (slotId.isEmpty()) {
         if (event.eventType == QStringLiteral("SENSOR_ERROR")
             || event.eventType == QStringLiteral("SENSOR_RECOVERED")) {
             recordServerEvent(event, QStringLiteral("SYSTEM"));
@@ -879,7 +607,6 @@ bool ParkingController::applyServerParkingEvent(const QJsonObject &object,
         }
         return false;
     }
-    const QString slotId = normalizeParkingSlotId(mappedSlotId);
     if (!isEvSlotId(slotId) && !isGeneralSlotId(slotId)) {
         return false;
     }
@@ -899,32 +626,10 @@ bool ParkingController::applyServerParkingEvent(const QJsonObject &object,
         || vacant
         || (stateTopic && event.alarmState == QStringLiteral("NONE")
             && !alarmOpen);
-    
-    const bool ocrRequested =
-        event.ocrStatus == QStringLiteral("PENDING")
-        || event.eventType == QStringLiteral("OCR_REQUESTED");
-    const bool ocrCompleted =
-        event.ocrStatus == QStringLiteral("RECOGNIZED")
-        || event.ocrStatus == QStringLiteral("COMPLETED")
-        || event.eventType == QStringLiteral("OCR_COMPLETED")
-        || event.eventType == QStringLiteral("VEHICLE_CLASSIFIED");
-    const bool ocrUnrecognized =
-        event.ocrStatus == QStringLiteral("FAILED")
-        || event.ocrStatus == QStringLiteral("UNRECOGNIZED")
-        || event.eventType == QStringLiteral("OCR_UNRECOGNIZED");
-
     const bool hasStateMeaning = occupied || vacant || alarmOpen
-        || monitoringStatus == QStringLiteral("CLEARED")
-        || ocrRequested || ocrCompleted || ocrUnrecognized;
+        || monitoringStatus == QStringLiteral("CLEARED");
     if (!hasStateMeaning) {
         return false;
-    }
-
-    if (vacant) {
-        m_state.slotImages.remove(slotId);
-        m_state.slotSessionIds.remove(slotId);
-    } else if (event.sessionId > 0) {
-        m_state.slotSessionIds.insert(slotId, event.sessionId);
     }
 
     VehicleClass incomingVehicleClass = VehicleClass::Unknown;
@@ -941,8 +646,6 @@ bool ParkingController::applyServerParkingEvent(const QJsonObject &object,
             if (removeUnknownState) {
                 m_state.evSlots.remove(slotId);
                 m_state.slotPlateNumbers.remove(slotId);
-                m_state.slotImages.remove(slotId);
-                m_state.slotSessionIds.remove(slotId);
             }
         } else {
             removeUnknownState = !m_state.parkingSlots.contains(slotId)
@@ -950,9 +653,6 @@ bool ParkingController::applyServerParkingEvent(const QJsonObject &object,
                     == SlotOccupancy::Unknown;
             if (removeUnknownState) {
                 m_state.parkingSlots.remove(slotId);
-                m_state.slotPlateNumbers.remove(slotId);
-                m_state.slotImages.remove(slotId);
-                m_state.slotSessionIds.remove(slotId);
             }
         }
         if (removeUnknownState) {
@@ -973,30 +673,13 @@ bool ParkingController::applyServerParkingEvent(const QJsonObject &object,
         if (occupied) {
             visual.occupancy = SlotOccupancy::Occupied;
             slot.occupiedTime = durationText(event.occupiedSeconds);
-            if (!slot.occupiedSince.isValid() && event.occurredAt.isValid()) {
-                slot.occupiedSince = event.occurredAt;
-            }
         } else if (vacant) {
             visual.occupancy = SlotOccupancy::Vacant;
             visual.vehicleClass = VehicleClass::Unknown;
             visual.alarm = SlotAlarmKind::None;
             visual.alarmAcknowledged = false;
-            visual.ocrStatus = OcrStatus::None;
             slot.plateNumber = QStringLiteral("-");
             slot.occupiedTime = QStringLiteral("-");
-            slot.occupiedSince = QDateTime();
-            slot.correlationId.clear();
-        }
-
-        if (ocrRequested) {
-            visual.ocrStatus = OcrStatus::Requested;
-            if (!event.correlationId.isEmpty()) {
-                slot.correlationId = event.correlationId;
-            }
-        } else if (ocrCompleted) {
-            visual.ocrStatus = OcrStatus::Completed;
-        } else if (ocrUnrecognized) {
-            visual.ocrStatus = OcrStatus::Unrecognized;
         }
 
         if (!event.plateNumber.isEmpty()) {
@@ -1019,14 +702,9 @@ bool ParkingController::applyServerParkingEvent(const QJsonObject &object,
 
         slot.state = stateFromVisual(visual);
         slot.alarmText = alarmTextFromKind(visual.alarm);
-        visual.correlationId = slot.correlationId;
         slot.visual = visual;
-        slot.lastUpdatedAt = event.occurredAt.isValid()
-            ? event.occurredAt : QDateTime::currentDateTime();
-        slot.eventId = event.eventId;
         m_state.evSlots.insert(slotId, slot);
         m_state.slotPlateNumbers.insert(slotId, slot.plateNumber);
-        if (vacant) m_state.slotPlateNumbers.remove(slotId);
     } else {
         ParkingSlotInfo slot = m_state.parkingSlots.value(slotId);
         slot.slotId = slotId;
@@ -1035,30 +713,11 @@ bool ParkingController::applyServerParkingEvent(const QJsonObject &object,
         if (occupied) {
             visual.occupancy = SlotOccupancy::Occupied;
             visual.vehicleClass = VehicleClass::General;
-            if (!slot.occupiedSince.isValid() && event.occurredAt.isValid()) {
-                slot.occupiedSince = event.occurredAt;
-            }
-            slot.occupiedTime = durationText(event.occupiedSeconds);
         } else if (vacant) {
             visual.occupancy = SlotOccupancy::Vacant;
             visual.vehicleClass = VehicleClass::Unknown;
             visual.alarm = SlotAlarmKind::None;
             visual.alarmAcknowledged = false;
-            visual.ocrStatus = OcrStatus::None;
-            slot.correlationId.clear();
-            slot.occupiedTime = QStringLiteral("-");
-            slot.occupiedSince = QDateTime();
-        }
-        
-        if (ocrRequested) {
-            visual.ocrStatus = OcrStatus::Requested;
-            if (!event.correlationId.isEmpty()) {
-                slot.correlationId = event.correlationId;
-            }
-        } else if (ocrCompleted) {
-            visual.ocrStatus = OcrStatus::Completed;
-        } else if (ocrUnrecognized) {
-            visual.ocrStatus = OcrStatus::Unrecognized;
         }
         if (alarmOpen) {
             visual.alarm = incomingAlarm;
@@ -1069,18 +728,8 @@ bool ParkingController::applyServerParkingEvent(const QJsonObject &object,
         }
 
         slot.state = stateFromVisual(visual);
-        visual.correlationId = slot.correlationId;
         slot.visual = visual;
-        slot.lastUpdatedAt = event.occurredAt.isValid()
-            ? event.occurredAt : QDateTime::currentDateTime();
-        slot.eventId = event.eventId;
         m_state.parkingSlots.insert(slotId, slot);
-        if (vacant) {
-            m_state.slotPlateNumbers.remove(slotId);
-        } else if (!event.plateNumber.trimmed().isEmpty()) {
-            m_state.slotPlateNumbers.insert(slotId,
-                                            event.plateNumber.trimmed());
-        }
     }
 
     notifyStateChanged();
@@ -1102,9 +751,6 @@ void ParkingController::recordServerEvent(const ServerParkingEvent &event,
     monitoringEvent.occurredAt = event.occurredAt.isValid()
         ? event.occurredAt : QDateTime::currentDateTime();
     monitoringEvent.sourceId = slotId;
-    monitoringEvent.evidenceSlotId = isEvidenceSlotId(slotId)
-        ? slotId : QString();
-    monitoringEvent.parkingSessionId = event.sessionId;
     monitoringEvent.eventType =
         ServerParkingEventAdapter::monitoringEventType(event);
     monitoringEvent.status =
@@ -1117,7 +763,6 @@ void ParkingController::recordServerEvent(const ServerParkingEvent &event,
                ? event.evidencePath
                : QStringLiteral("Pi server event %1")
                      .arg(event.eventType));
-    rememberEventEvidence(monitoringEvent, event.plateNumber);
     emit eventLogged(monitoringEvent);
 }
 
@@ -1137,233 +782,6 @@ bool ParkingController::rememberServerEventId(const QString &eventId)
     return true;
 }
 
-void ParkingController::rememberEventEvidence(
-    const MonitoringEvent &event,
-    const QString &plateNumber)
-{
-    const QString eventId = event.id.trimmed();
-    const QString slotId = resolveParkingZoneId(event.evidenceSlotId);
-    if (eventId.isEmpty() || !isEvidenceSlotId(slotId)) {
-        return;
-    }
-
-    EventEvidenceReference reference;
-    reference.eventId = eventId;
-    reference.slotId = slotId;
-    reference.sessionId = event.parkingSessionId;
-    reference.state = slotState(slotId);
-    reference.plateNumber = plateNumber.trimmed();
-    if (reference.plateNumber.isEmpty()) {
-        reference.plateNumber = this->plateNumber(slotId);
-    }
-
-    if (!m_eventEvidenceReferences.contains(eventId)) {
-        m_eventEvidenceOrder.enqueue(eventId);
-    }
-    m_eventEvidenceReferences.insert(eventId, reference);
-    while (m_eventEvidenceOrder.size() > kEventEvidenceReferenceLimit) {
-        m_eventEvidenceReferences.remove(m_eventEvidenceOrder.dequeue());
-    }
-}
-
-ParkingController::EventEvidenceReference
-ParkingController::eventEvidenceReference(const QString &eventId) const
-{
-    return m_eventEvidenceReferences.value(eventId.trimmed());
-}
-
-bool ParkingController::hasEventEvidence(const QString &eventId) const
-{
-    return m_eventEvidenceReferences.contains(eventId.trimmed());
-}
-
-QString ParkingController::eventEvidenceSlotId(const QString &eventId) const
-{
-    return eventEvidenceReference(eventId).slotId;
-}
-
-QString ParkingController::resolveParkingZoneId(const QString &sourceId) const
-{
-    const QString mapped = m_slotIdMapper.toZoneId(sourceId);
-    const QString slotId = normalizeParkingSlotId(
-        mapped.isEmpty() ? sourceId : mapped);
-    return isEvidenceSlotId(slotId) ? slotId : QString();
-}
-
-void ParkingController::requestEventEvidence(const QString &rawEventId)
-{
-    const QString eventId = rawEventId.trimmed();
-    const EventEvidenceReference reference = eventEvidenceReference(eventId);
-    if (reference.eventId.isEmpty()) {
-        emit eventEvidenceFailed(
-            eventId, QString(),
-            QStringLiteral("This event is not linked to a parking session."));
-        return;
-    }
-
-    if (!m_apiClient) {
-        QList<ParkingImageResource> cachedImages = m_state.slotImages.value(
-            reference.slotId);
-        if (reference.sessionId > 0) {
-            cachedImages.erase(
-                std::remove_if(
-                    cachedImages.begin(), cachedImages.end(),
-                    [&reference](const ParkingImageResource &image) {
-                        return image.sessionId > 0
-                            && image.sessionId != reference.sessionId;
-                    }),
-                cachedImages.end());
-        }
-        emitEventEvidenceReady(reference, cachedImages);
-        return;
-    }
-
-    if (reference.sessionId > 0) {
-        requestEventEvidenceSession(reference);
-    } else {
-        requestEventEvidenceSlotDetail(reference);
-    }
-}
-
-void ParkingController::requestEventEvidenceSlotDetail(
-    const EventEvidenceReference &reference)
-{
-    QString serverSlotId = m_slotIdMapper.toServerSlotId(reference.slotId);
-    if (serverSlotId.isEmpty()) {
-        serverSlotId = reference.slotId;
-    }
-    if (serverSlotId.startsWith(QStringLiteral("EV-"))
-        || serverSlotId.startsWith(QStringLiteral("P-"))) {
-        serverSlotId.remove(QLatin1Char('-'));
-    }
-    if (serverSlotId.isEmpty()) {
-        emit eventEvidenceFailed(
-            reference.eventId, reference.slotId,
-            QStringLiteral("No server slot mapping is configured."));
-        return;
-    }
-
-    QString path = m_slotDetailPath;
-    path.replace(QStringLiteral("{slot_id}"), serverSlotId);
-    const QString requestTag = eventEvidenceRequestTag(
-        m_nextEventEvidenceRequestSequence++);
-    m_pendingEventEvidenceRequests.insert(
-        requestTag,
-        {reference, EventEvidenceRequestKind::SlotDetail});
-    emit bannerChanged(
-        QStringLiteral("Resolving event %1 parking session...")
-            .arg(reference.eventId),
-        false);
-    m_apiClient->getJsonTagged(path, requestTag);
-}
-
-void ParkingController::requestEventEvidenceSession(
-    const EventEvidenceReference &reference)
-{
-    if (reference.sessionId <= 0 || !m_apiClient) {
-        emit eventEvidenceFailed(
-            reference.eventId, reference.slotId,
-            QStringLiteral("The event does not provide a parking session ID."));
-        return;
-    }
-
-    QString path = m_sessionImagesPath;
-    path.replace(QStringLiteral("{session_id}"),
-                 QString::number(reference.sessionId));
-    const QString requestTag = eventEvidenceRequestTag(
-        m_nextEventEvidenceRequestSequence++);
-    m_pendingEventEvidenceRequests.insert(
-        requestTag,
-        {reference, EventEvidenceRequestKind::SessionImages});
-    emit bannerChanged(
-        QStringLiteral("Loading event %1 evidence images...")
-            .arg(reference.eventId),
-        false);
-    m_apiClient->getJsonTagged(path, requestTag);
-}
-
-void ParkingController::applyEventEvidenceResponse(
-    const QString &requestTag,
-    const QJsonDocument &document)
-{
-    if (!m_pendingEventEvidenceRequests.contains(requestTag)) {
-        return;
-    }
-    PendingEventEvidenceRequest pending =
-        m_pendingEventEvidenceRequests.take(requestTag);
-
-    if (pending.kind == EventEvidenceRequestKind::SlotDetail) {
-        ParkingSlotSnapshot slot;
-        QString error;
-        if (!ParkingResponseParser::parseSlotDetail(document, slot, error)) {
-            emit eventEvidenceFailed(
-                pending.reference.eventId, pending.reference.slotId, error);
-            return;
-        }
-
-        const QString responseSlotId = resolveParkingZoneId(slot.slotId);
-        if (responseSlotId != pending.reference.slotId) {
-            emit eventEvidenceFailed(
-                pending.reference.eventId, pending.reference.slotId,
-                QStringLiteral("The server returned a different parking slot."));
-            return;
-        }
-
-        pending.reference.sessionId = slot.sessionId;
-        pending.reference.state = slotStateFromText(slot.state);
-        if (!slot.plateNumber.trimmed().isEmpty()) {
-            pending.reference.plateNumber = slot.plateNumber.trimmed();
-        }
-        m_eventEvidenceReferences.insert(
-            pending.reference.eventId, pending.reference);
-
-        if (pending.reference.sessionId > 0) {
-            requestEventEvidenceSession(pending.reference);
-            return;
-        }
-
-        emitEventEvidenceReady(pending.reference, slot.images);
-        return;
-    }
-
-    QList<ParkingImageResource> images;
-    QString error;
-    if (!ParkingResponseParser::parseSessionImages(document, images, error)) {
-        emit eventEvidenceFailed(
-            pending.reference.eventId, pending.reference.slotId, error);
-        return;
-    }
-    emitEventEvidenceReady(pending.reference, images);
-}
-
-void ParkingController::applyEventEvidenceError(
-    const QString &requestTag,
-    const QString &message)
-{
-    if (!m_pendingEventEvidenceRequests.contains(requestTag)) {
-        return;
-    }
-    const PendingEventEvidenceRequest pending =
-        m_pendingEventEvidenceRequests.take(requestTag);
-    emit eventEvidenceFailed(
-        pending.reference.eventId, pending.reference.slotId, message);
-}
-
-void ParkingController::emitEventEvidenceReady(
-    const EventEvidenceReference &reference,
-    QList<ParkingImageResource> images)
-{
-    for (ParkingImageResource &image : images) {
-        image.url = resolveApiUrl(image.url);
-    }
-    emit eventEvidenceReady(
-        reference.eventId, reference.slotId, reference.sessionId,
-        reference.state,
-        reference.plateNumber.isEmpty() ? QStringLiteral("-")
-                                        : reference.plateNumber,
-        images);
-}
-
 void ParkingController::initializeApiClient()
 {
     QSettings sharedSettings(m_sharedConfigPath, QSettings::IniFormat);
@@ -1373,8 +791,7 @@ void ParkingController::initializeApiClient()
                                            : sharedSettings.value(key, defaultValue);
     };
 
-    m_state.apiEnabled = m_hasAuthenticatedServerOverride
-        || setting(QStringLiteral("api/enabled"), false).toBool();
+    m_state.apiEnabled = setting(QStringLiteral("api/enabled"), false).toBool();
     m_apiDiagnostic = ApiDiagnosticState{};
     m_apiDiagnostic.enabled = m_state.apiEnabled;
     if (!m_state.apiEnabled) {
@@ -1385,10 +802,7 @@ void ParkingController::initializeApiClient()
         return;
     }
 
-    m_apiBaseUrl = m_hasAuthenticatedServerOverride
-        ? m_authenticatedServerOrigin
-        : QUrl(setting(QStringLiteral("api/base_url"), QString())
-                   .toString().trimmed());
+    m_apiBaseUrl = QUrl(setting(QStringLiteral("api/base_url"), QString()).toString().trimmed());
     m_apiDiagnostic.endpoint = m_apiBaseUrl.toString(
         QUrl::RemoveUserInfo | QUrl::RemoveQuery | QUrl::RemoveFragment);
     m_apiDiagnostic.status = QStringLiteral("DISCONNECTED");
@@ -1399,15 +813,6 @@ void ParkingController::initializeApiClient()
     m_sessionImagesPath = setting(
         QStringLiteral("api/session_images_path"),
         QStringLiteral("/api/v1/parking-sessions/{session_id}/images")).toString();
-    m_overstayThresholdPath = setting(
-        QStringLiteral("api/overstay_threshold_path"),
-        QStringLiteral("/api/v1/settings/overstay-threshold")).toString();
-    m_parkingRoiListPath = setting(
-        QStringLiteral("api/parking_roi_list_path"),
-        QStringLiteral("/api/v1/settings/parking-slots/roi")).toString();
-    m_parkingRoiPathTemplate = setting(
-        QStringLiteral("api/parking_roi_path"),
-        QStringLiteral("/api/v1/settings/parking-slots/{slot_id}/roi")).toString();
     m_apiTimeoutMs = setting(QStringLiteral("api/timeout_ms"), 5000).toInt();
     m_allowInsecureHttp =
         setting(QStringLiteral("api/allow_insecure_http"), false).toBool();
@@ -1425,26 +830,6 @@ void ParkingController::rebuildApiClient()
 {
     if (m_reconnectTimer) m_reconnectTimer->stop();
     m_snapshotRequestInFlight = false;
-    if (m_overstayRequest != OverstayRequest::None) {
-        const bool updateRequest = m_overstayRequest == OverstayRequest::Update;
-        m_overstayRequest = OverstayRequest::None;
-        m_pendingOverstaySeconds = -1;
-        emit overstayThresholdRequestFailed(
-            QStringLiteral("The server connection changed."), updateRequest);
-    }
-    const QStringList pendingRoiTags = m_pendingParkingRoiTags.values();
-    for (const QString &tag : pendingRoiTags) {
-        applyParkingRoiError(tag,
-            QStringLiteral("The server connection changed."));
-    }
-    m_pendingParkingRoiTags.clear();
-    m_pendingParkingRoiExpectedValues.clear();
-    const QStringList pendingEventEvidenceTags =
-        m_pendingEventEvidenceRequests.keys();
-    for (const QString &tag : pendingEventEvidenceTags) {
-        applyEventEvidenceError(
-            tag, QStringLiteral("The server connection changed."));
-    }
     if (m_apiClient) {
         disconnect(m_apiClient, nullptr, this, nullptr);
         m_apiClient->deleteLater();
@@ -1457,34 +842,11 @@ void ParkingController::rebuildApiClient()
         m_apiBaseUrl, m_apiTimeoutMs, m_allowInsecureHttp, this);
     m_imageLoader = new ImageLoader(
         m_apiTimeoutMs, m_allowInsecureHttp, this);
-    m_apiClient->setBearerAuthentication(m_authenticatedServerOrigin,
-                                         m_bearerToken);
-    m_imageLoader->setBearerAuthentication(m_authenticatedServerOrigin,
-                                            m_bearerToken);
-
-    const auto handleAuthenticationExpired = [this]() {
-        if (m_authenticationExpired) {
-            return;
-        }
-        m_authenticationExpired = true;
-        m_snapshotRequestInFlight = false;
-        if (m_reconnectTimer) {
-            m_reconnectTimer->stop();
-        }
-        emit authenticationExpired();
-    };
-    connect(m_apiClient, &ApiClient::authenticationRequired,
-            this, handleAuthenticationExpired);
-    connect(m_imageLoader, &ImageLoader::authenticationRequired,
-            this, handleAuthenticationExpired);
 
     connect(m_apiClient, &ApiClient::jsonReceived, this,
             [this](const QString &path, const QJsonDocument &document,
                    int latencyMs, int httpStatus) {
-                if (path == m_overstayThresholdPath
-                    && m_overstayRequest != OverstayRequest::None) {
-                    applyOverstayThresholdResponse(document);
-                } else if (path == m_slotsPath) {
+                if (path == m_slotsPath) {
                     m_snapshotRequestInFlight = false;
                     m_apiDiagnostic.lastLatencyMs = latencyMs;
                     m_apiDiagnostic.lastHttpStatus = httpStatus;
@@ -1502,14 +864,7 @@ void ParkingController::rebuildApiClient()
                 recordEvent(QStringLiteral("SYSTEM"), QStringLiteral("API_ERROR"),
                             path + QStringLiteral(": ") + message,
                             QStringLiteral("FAILED"));
-                if (path == m_overstayThresholdPath
-                    && m_overstayRequest != OverstayRequest::None) {
-                    const bool updateRequest =
-                        m_overstayRequest == OverstayRequest::Update;
-                    m_overstayRequest = OverstayRequest::None;
-                    m_pendingOverstaySeconds = -1;
-                    emit overstayThresholdRequestFailed(message, updateRequest);
-                } else if (path == m_slotsPath) {
+                if (path == m_slotsPath) {
                     m_snapshotRequestInFlight = false;
                     m_apiDiagnostic.connected = false;
                     m_apiDiagnostic.status = QStringLiteral("ERROR");
@@ -1528,64 +883,13 @@ void ParkingController::rebuildApiClient()
                     emit detailError(message);
                 }
             });
-    connect(m_apiClient, &ApiClient::taggedJsonReceived, this,
-            [this](const QString &requestTag, const QString &,
-                   const QJsonDocument &document, int, int) {
-                if (requestTag.startsWith(QStringLiteral("parking-roi|"))) {
-                    applyParkingRoiResponse(requestTag, document);
-                } else if (requestTag.startsWith(
-                               QStringLiteral("event-evidence|"))) {
-                    applyEventEvidenceResponse(requestTag, document);
-                }
-            });
-    connect(m_apiClient, &ApiClient::taggedRequestFailed, this,
-            [this](const QString &requestTag, const QString &path,
-                   const QString &message, int, int) {
-                recordEvent(QStringLiteral("SYSTEM"),
-                            QStringLiteral("PARKING_ROI_API_ERROR"),
-                            path + QStringLiteral(": ") + message,
-                            QStringLiteral("FAILED"));
-                if (requestTag.startsWith(QStringLiteral("parking-roi|"))) {
-                    applyParkingRoiError(requestTag, message);
-                } else if (requestTag.startsWith(
-                               QStringLiteral("event-evidence|"))) {
-                    applyEventEvidenceError(requestTag, message);
-                }
-            });
 
-    emit imageLoaderChanged(m_imageLoader);
     emit serverBaseUrlChanged(m_apiBaseUrl.toString());
     publishApiDiagnostic();
     notifyStateChanged();
 }
-
-void ParkingController::setBearerAuthentication(
-    const QUrl &fixedLoginOrigin, const QByteArray &token)
-{
-    m_authenticatedServerOrigin =
-        UrlOrigin::normalizedHttpOrigin(fixedLoginOrigin);
-    m_bearerToken = token;
-    if (m_bearerToken.contains('\r') || m_bearerToken.contains('\n')) {
-        m_bearerToken.clear();
-    }
-    m_hasAuthenticatedServerOverride =
-        !m_authenticatedServerOrigin.isEmpty() && !m_bearerToken.isEmpty();
-    m_authenticationExpired = false;
-    if (m_apiClient) {
-        m_apiClient->setBearerAuthentication(m_authenticatedServerOrigin,
-                                             m_bearerToken);
-    }
-    if (m_imageLoader) {
-        m_imageLoader->setBearerAuthentication(m_authenticatedServerOrigin,
-                                               m_bearerToken);
-    }
-}
-
 void ParkingController::reconnectNow()
 {
-    if (m_authenticationExpired) {
-        return;
-    }
     if (!m_state.apiEnabled || !m_apiClient) {
         emit serverConnectionChanged(QStringLiteral("API disabled"), false);
         return;
@@ -1595,6 +899,10 @@ void ParkingController::reconnectNow()
         emit serverConnectionChanged(QStringLiteral("Connection already in progress"), false);
         return;
     }
+    const QString message =
+        QStringLiteral("Connecting to %1...").arg(m_apiBaseUrl.toString(
+            QUrl::RemoveUserInfo | QUrl::RemoveQuery | QUrl::RemoveFragment));
+    emit bannerChanged(message, false);
     emit serverConnectionChanged(QStringLiteral("Connecting..."), false);
     m_apiDiagnostic.connected = false;
     m_apiDiagnostic.status = QStringLiteral("CONNECTING");
@@ -1605,349 +913,9 @@ void ParkingController::reconnectNow()
     m_apiClient->getJson(m_slotsPath);
 }
 
-void ParkingController::requestOverstayThreshold()
-{
-    if (m_overstayRequest != OverstayRequest::None) return;
-    if (!m_state.apiEnabled || !m_apiClient) {
-        emit overstayThresholdRequestFailed(
-            QStringLiteral("Server API is disabled or not configured."), false);
-        return;
-    }
-
-    m_overstayRequest = OverstayRequest::Fetch;
-    emit overstayThresholdRequestStarted(
-        QStringLiteral("Loading the server setting..."));
-    m_apiClient->getJson(m_overstayThresholdPath);
-}
-
-void ParkingController::updateOverstayThreshold(int seconds)
-{
-    if (m_overstayRequest != OverstayRequest::None) return;
-    if (seconds < kMinimumOverstayThresholdSeconds
-        || seconds > kMaximumOverstayThresholdSeconds) {
-        emit overstayThresholdRequestFailed(
-            QStringLiteral(
-                "thresholdSeconds must be between 60 and 86400."), true);
-        return;
-    }
-    if (!m_state.apiEnabled || !m_apiClient || !m_apiDiagnostic.connected) {
-        emit overstayThresholdRequestFailed(
-            QStringLiteral("Server is not connected."), true);
-        return;
-    }
-
-    m_overstayRequest = OverstayRequest::Update;
-    m_pendingOverstaySeconds = seconds;
-    emit overstayThresholdRequestStarted(
-        QStringLiteral("Applying the new threshold..."));
-    QJsonObject request;
-    request.insert(QStringLiteral("thresholdSeconds"), seconds);
-    m_apiClient->putJson(m_overstayThresholdPath, request);
-}
-
-void ParkingController::requestParkingRois(quint64 generation)
-{
-    if (!m_state.apiEnabled || !m_apiClient) {
-        emit parkingRoiRequestFailed(
-            QString(), QStringLiteral("Server API is disabled or not configured."),
-            generation, false);
-        return;
-    }
-    const QString tag = parkingRoiTag(QStringLiteral("list"), generation);
-    m_pendingParkingRoiTags.insert(tag);
-    m_apiClient->getJsonTagged(m_parkingRoiListPath, tag);
-}
-
-void ParkingController::requestParkingRoi(const QString &slotId,
-                                          quint64 generation)
-{
-    const QString zoneId = parkingRoiZoneId(slotId);
-    if (!isParkingRoiZoneId(zoneId)) {
-        emit parkingRoiRequestFailed(
-            zoneId, QStringLiteral("Parking slot was not found."),
-            generation, false);
-        return;
-    }
-    if (!m_state.apiEnabled || !m_apiClient) {
-        emit parkingRoiRequestFailed(
-            zoneId, QStringLiteral("Server API is disabled or not configured."),
-            generation, false);
-        return;
-    }
-    const QString serverSlotId = parkingRoiServerSlotId(zoneId);
-    if (serverSlotId.isEmpty()) {
-        emit parkingRoiRequestFailed(
-            zoneId, QStringLiteral("No server slot mapping is configured."),
-            generation, false);
-        return;
-    }
-    const QString tag = parkingRoiTag(QStringLiteral("get"), generation,
-                                      zoneId);
-    m_pendingParkingRoiTags.insert(tag);
-    m_apiClient->getJsonTagged(parkingRoiPath(serverSlotId), tag);
-}
-
-void ParkingController::updateParkingRoi(const QString &slotId,
-                                         const ParkingRoi &roi,
-                                         quint64 generation)
-{
-    const QString zoneId = parkingRoiZoneId(slotId);
-    QString validationError;
-    if (!isParkingRoiZoneId(zoneId)) {
-        emit parkingRoiRequestFailed(
-            zoneId, QStringLiteral("Parking slot was not found."),
-            generation, true);
-        return;
-    }
-    if (!roi.isValid(&validationError)) {
-        emit parkingRoiRequestFailed(zoneId, validationError,
-                                     generation, true);
-        return;
-    }
-    if (!m_state.apiEnabled || !m_apiClient) {
-        emit parkingRoiRequestFailed(
-            zoneId, QStringLiteral("Server API is disabled or not configured."),
-            generation, true);
-        return;
-    }
-    const QString serverSlotId = parkingRoiServerSlotId(zoneId);
-    if (serverSlotId.isEmpty()) {
-        emit parkingRoiRequestFailed(
-            zoneId, QStringLiteral("No server slot mapping is configured."),
-            generation, true);
-        return;
-    }
-    const QString tag = parkingRoiTag(QStringLiteral("put"), generation,
-                                      zoneId);
-    m_pendingParkingRoiTags.insert(tag);
-    m_pendingParkingRoiExpectedValues.insert(tag, roi);
-    m_apiClient->putJsonTagged(parkingRoiPath(serverSlotId),
-                               ParkingRoiCodec::toJson(roi), tag);
-}
-
-void ParkingController::applyParkingRoiResponse(
-    const QString &requestTag, const QJsonDocument &document)
-{
-    if (!m_pendingParkingRoiTags.remove(requestTag)) return;
-    const bool hasExpectedRoi =
-        m_pendingParkingRoiExpectedValues.contains(requestTag);
-    const ParkingRoi expectedRoi =
-        m_pendingParkingRoiExpectedValues.take(requestTag);
-    const QStringList parts = requestTag.split(QLatin1Char('|'));
-    if (parts.size() < 5) return;
-    const QString kind = parts.at(1);
-    bool generationOk = false;
-    const quint64 generation = parts.at(2).toULongLong(&generationOk);
-    const QString expectedSlot = parts.at(3);
-    if (!generationOk) return;
-
-    QString error;
-    if (kind == QStringLiteral("list")) {
-        ParkingRoiMap serverRois;
-        if (!ParkingRoiCodec::parseList(document, serverRois, error)) {
-            emit parkingRoiRequestFailed(QString(), error, generation, false);
-            return;
-        }
-        ParkingRoiMap zoneRois;
-        for (auto it = serverRois.constBegin(); it != serverRois.constEnd(); ++it) {
-            const QString zoneId = parkingRoiZoneId(it.key());
-            if (!isParkingRoiZoneId(zoneId) || zoneRois.contains(zoneId)) {
-                emit parkingRoiRequestFailed(
-                    QString(),
-                    QStringLiteral("The server ROI list contains an unmapped or duplicate parking slot."),
-                    generation, false);
-                return;
-            }
-            zoneRois.insert(zoneId, it.value());
-        }
-        emit parkingRoiListReceived(zoneRois, generation);
-        return;
-    }
-
-    QString responseServerSlot;
-    ParkingRoi roi;
-    bool appliedImmediately = false;
-    if (!ParkingRoiCodec::parseSingle(document, responseServerSlot, roi,
-                                      &appliedImmediately, error)) {
-        emit parkingRoiRequestFailed(expectedSlot, error, generation,
-                                     kind != QStringLiteral("get"));
-        return;
-    }
-    const QString responseZoneId = parkingRoiZoneId(responseServerSlot);
-    if (responseZoneId != expectedSlot) {
-        emit parkingRoiRequestFailed(
-            expectedSlot, QStringLiteral("The server returned a different parking slot."),
-            generation, kind != QStringLiteral("get"));
-        return;
-    }
-
-    if (kind == QStringLiteral("put")) {
-        if (!hasExpectedRoi) {
-            emit parkingRoiRequestFailed(
-                expectedSlot, QStringLiteral("The ROI verification context was lost."),
-                generation, true);
-            return;
-        }
-        const QString serverSlotId = parkingRoiServerSlotId(expectedSlot);
-        if (serverSlotId.isEmpty()) {
-            emit parkingRoiRequestFailed(
-                expectedSlot, QStringLiteral("No server slot mapping is configured."),
-                generation, true);
-            return;
-        }
-        const QString verifyTag = parkingRoiTag(
-            QStringLiteral("verify"), generation, expectedSlot,
-            appliedImmediately);
-        m_pendingParkingRoiTags.insert(verifyTag);
-        m_pendingParkingRoiExpectedValues.insert(verifyTag, expectedRoi);
-        m_apiClient->getJsonTagged(parkingRoiPath(serverSlotId), verifyTag);
-        return;
-    }
-
-    const bool afterSave = kind == QStringLiteral("verify");
-    if (afterSave
-        && (!hasExpectedRoi || !roi.nearlyEquals(expectedRoi))) {
-        emit parkingRoiRequestFailed(
-            expectedSlot,
-            QStringLiteral("The saved ROI does not match the requested ROI."),
-            generation, true);
-        return;
-    }
-    const bool verifiedAppliedImmediately = afterSave
-        && parts.at(4) == QStringLiteral("1");
-    emit parkingRoiReceived(responseZoneId, roi, generation, afterSave,
-                            verifiedAppliedImmediately);
-    if (afterSave) {
-        recordEvent(
-            responseZoneId, QStringLiteral("PARKING_ROI_UPDATED"),
-            QStringLiteral("Normalized ROI saved and verified"),
-            QStringLiteral("DONE"));
-    }
-}
-
-void ParkingController::applyParkingRoiError(
-    const QString &requestTag, const QString &message)
-{
-    if (!m_pendingParkingRoiTags.remove(requestTag)) return;
-    m_pendingParkingRoiExpectedValues.remove(requestTag);
-    const QStringList parts = requestTag.split(QLatin1Char('|'));
-    if (parts.size() < 5) return;
-    bool generationOk = false;
-    const quint64 generation = parts.at(2).toULongLong(&generationOk);
-    if (!generationOk) return;
-    const QString kind = parts.at(1);
-    emit parkingRoiRequestFailed(parts.at(3), message, generation,
-                                 kind == QStringLiteral("put")
-                                     || kind == QStringLiteral("verify"));
-}
-
-QString ParkingController::parkingRoiPath(const QString &slotId) const
-{
-    QString path = m_parkingRoiPathTemplate;
-    path.replace(QStringLiteral("{slot_id}"), slotId);
-    return path;
-}
-
-QString ParkingController::parkingRoiZoneId(const QString &slotId) const
-{
-    const QString mapped = m_slotIdMapper.toZoneId(slotId);
-    return normalizeParkingSlotId(mapped.isEmpty() ? slotId : mapped);
-}
-
-QString ParkingController::parkingRoiServerSlotId(const QString &zoneId) const
-{
-    QString serverSlotId = m_slotIdMapper.toServerSlotId(
-        normalizeParkingSlotId(zoneId));
-    if (serverSlotId.startsWith(QStringLiteral("EV-"))
-        || serverSlotId.startsWith(QStringLiteral("P-"))) {
-        serverSlotId.remove(QLatin1Char('-'));
-    }
-    return serverSlotId;
-}
-
-void ParkingController::applyOverstayThresholdResponse(
-    const QJsonDocument &document)
-{
-    const OverstayRequest completedRequest = m_overstayRequest;
-    const bool updateResponse = completedRequest == OverstayRequest::Update;
-    int seconds = -1;
-    QString applyPolicy;
-    QString errorMessage;
-    if (!parseOverstayThreshold(document, updateResponse, seconds,
-                                applyPolicy, errorMessage)) {
-        m_overstayRequest = OverstayRequest::None;
-        m_pendingOverstaySeconds = -1;
-        emit overstayThresholdRequestFailed(
-            errorMessage, updateResponse);
-        return;
-    }
-
-    const QJsonObject object = document.object();
-    const QJsonValue effectiveValue = object.value(
-        QStringLiteral("effectiveSeconds"));
-    const QJsonValue revisionValue = object.value(
-        QStringLiteral("appliedRevision"));
-    const QJsonValue runtimeAppliedValue = object.value(
-        QStringLiteral("runtimeApplied"));
-    const QJsonValue runtimeHealthyValue = object.value(
-        QStringLiteral("runtimeHealthy"));
-    const auto exactSeconds = [](const QJsonValue &value, int expected) {
-        return value.isDouble()
-            && value.toDouble() == static_cast<double>(expected);
-    };
-    const qint64 revision = revisionValue.toInteger(-1);
-    const bool runtimeContractValid =
-        exactSeconds(effectiveValue, seconds)
-        && revisionValue.isDouble() && revision > 0
-        && revisionValue.toDouble() == static_cast<double>(revision)
-        && runtimeAppliedValue.isBool() && runtimeAppliedValue.toBool()
-        && runtimeHealthyValue.isBool() && runtimeHealthyValue.toBool();
-    if (!runtimeContractValid) {
-        m_overstayRequest = OverstayRequest::None;
-        m_pendingOverstaySeconds = -1;
-        emit overstayThresholdRequestFailed(
-            QStringLiteral(
-                "The server runtime policy is unhealthy or incomplete."),
-            updateResponse);
-        return;
-    }
-
-    if (updateResponse) {
-        const QJsonValue requestedValue = object.value(
-            QStringLiteral("requestedSeconds"));
-        if (m_pendingOverstaySeconds < 0
-            || seconds != m_pendingOverstaySeconds
-            || !exactSeconds(requestedValue, m_pendingOverstaySeconds)) {
-            m_overstayRequest = OverstayRequest::None;
-            m_pendingOverstaySeconds = -1;
-            emit overstayThresholdRequestFailed(
-                QStringLiteral(
-                    "The server did not confirm the effective runtime policy."),
-                true);
-            return;
-        }
-    }
-
-    m_overstayRequest = OverstayRequest::None;
-    m_pendingOverstaySeconds = -1;
-    emit overstayThresholdReceived(seconds, applyPolicy,
-                                   updateResponse);
-    if (updateResponse) {
-        recordEvent(
-            QStringLiteral("SYSTEM"),
-            QStringLiteral("OVERSTAY_THRESHOLD_UPDATED"),
-            QStringLiteral("Applied %1 seconds | policy=%2")
-                .arg(seconds)
-                .arg(applyPolicy.isEmpty()
-                         ? QStringLiteral("NOT_PROVIDED") : applyPolicy),
-            QStringLiteral("DONE"));
-    }
-}
-
 void ParkingController::scheduleReconnect(const QString &reason)
 {
-    if (m_authenticationExpired
-        || !m_state.apiEnabled || !m_reconnectTimer) return;
+    if (!m_state.apiEnabled || !m_reconnectTimer) return;
     const int delayMs = m_currentReconnectDelayMs;
     emit bannerChanged(
         QStringLiteral("Parking API unavailable | Retrying in %1 seconds")
@@ -1979,12 +947,6 @@ void ParkingController::updateServerBaseUrl(const QString &baseUrl)
             QStringLiteral("Enter a valid %1 server URL including port.")
                 .arg(m_allowInsecureHttp ? QStringLiteral("HTTP or HTTPS")
                                         : QStringLiteral("HTTPS")));
-        return;
-    }
-    if (m_hasAuthenticatedServerOverride
-        && !UrlOrigin::sameHttpOrigin(url, m_authenticatedServerOrigin)) {
-        emit serverConfigurationError(QStringLiteral(
-            "Sign in again before changing to a different server."));
         return;
     }
 
@@ -2035,25 +997,11 @@ void ParkingController::applyParkingSnapshot(const QJsonDocument &document)
     const ParkingViewState previousState = m_state;
     resetSlotsForSnapshot();
     int appliedCount = 0;
-    int rejectedCount = 0;
-    int duplicateCount = 0;
     for (const ParkingSlotSnapshot &slot : snapshot.parkingSlots) {
-        const QString mappedSlotId = m_slotIdMapper.toZoneId(slot.slotId);
-        if (mappedSlotId.isEmpty()) {
-            ++rejectedCount;
-            recordEvent(slot.slotId, QStringLiteral("API_SLOT_SKIPPED"), QStringLiteral("No zone mapping for server slot"), QStringLiteral("SKIPPED"));
-            continue;
-        }
-        // Even if mapped, we must still normalize it to standard EV-01 / P-01 format
-        // in case the mapper's output wasn't perfect, or for passthrough mode.
-        const QString slotId = normalizeParkingSlotId(mappedSlotId);
+        const QString slotId = normalizeParkingSlotId(slot.slotId);
         if (!isEvSlotId(slotId) && !isGeneralSlotId(slotId)) {
-            ++rejectedCount;
             recordEvent(slotId, QStringLiteral("API_SLOT_SKIPPED"), QStringLiteral("Unknown parking slot in response"), QStringLiteral("SKIPPED"));
             continue;
-        }
-        if (m_state.evSlots.contains(slotId) || m_state.parkingSlots.contains(slotId)) {
-            ++duplicateCount;
         }
         SlotState state = slotStateFromText(slot.state);
         const SlotAlarmKind alarmKind = slotAlarmKindFromText(slot.alarm, state);
@@ -2093,66 +1041,32 @@ void ParkingController::applyParkingSnapshot(const QJsonDocument &document)
                                        ? QStringLiteral("NORMAL") : slot.alarm)
                                 : alarmTextFromKind(visual.alarm)};
             info.visual = visual;
-            info.occupiedSince = slot.occupiedSince;
-            info.lastUpdatedAt = snapshot.generatedAt;
             m_state.evSlots[slotId] = info;
         } else {
             ParkingSlotInfo info{slotId, state};
             info.visual = visual;
-            info.occupiedTime = occupiedDurationText(
-                slot.occupiedSince, slot.elapsedSeconds);
-            info.occupiedSince = slot.occupiedSince;
-            info.lastUpdatedAt = snapshot.generatedAt;
             m_state.parkingSlots[slotId] = info;
         }
         m_state.slotPlateNumbers.insert(slotId, slot.plateNumber);
-        m_state.slotSessionIds.insert(slotId, slot.sessionId);
         QList<ParkingImageResource> images;
         for (ParkingImageResource image : slot.images) { image.url = resolveApiUrl(image.url); images.append(image); }
-        if (images.isEmpty() && slot.sessionId > 0
-            && previousState.slotSessionIds.value(slotId, -1)
-                == slot.sessionId) {
-            images = previousState.slotImages.value(slotId);
-        }
         if (!images.isEmpty()) m_state.slotImages.insert(slotId, images);
         ++appliedCount;
     }
-    // Keep Dashboard capacity tied to the latest accepted server snapshot.
-    // MQTT/manual updates can add or remove entries in m_state afterwards;
-    // they are runtime state changes, not a new capacity declaration.
-    m_state.serverSlotCount = m_state.evSlots.size() + m_state.parkingSlots.size();
-    m_state.hasServerSnapshot = true;
-    m_state.generatedAt = snapshot.generatedAt;
     notifyStateChanged();
     const QString generatedAt = snapshot.generatedAt.isValid()
         ? snapshot.generatedAt.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))
         : QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-    const int uniqueCount = m_state.serverSlotCount;
-    const int evCount = m_state.evSlots.size();
-    const int parkingCount = m_state.parkingSlots.size();
-    const int receivedCount = snapshot.parkingSlots.size();
-    const QString snapshotDetail = QStringLiteral(
-        "Server snapshot: received=%1, applied=%2, unique=%3 (EV=%4, P=%5), "
-        "rejected=%6, duplicates=%7, generated=%8")
-        .arg(receivedCount)
-        .arg(appliedCount)
-        .arg(uniqueCount)
-        .arg(evCount)
-        .arg(parkingCount)
-        .arg(rejectedCount)
-        .arg(duplicateCount)
-        .arg(generatedAt);
-    emit statusMessageChanged(snapshotDetail);
+    emit statusMessageChanged(QStringLiteral("API synchronized: %1 slots at %2").arg(appliedCount).arg(generatedAt));
     m_apiDiagnostic.connected = true;
     m_apiDiagnostic.status = QStringLiteral("CONNECTED");
     m_apiDiagnostic.lastError.clear();
     m_apiDiagnostic.lastSuccessAt = QDateTime::currentDateTime();
     m_apiDiagnostic.consecutiveFailures = 0;
     m_apiDiagnostic.nextRetrySeconds = 0;
-    m_apiDiagnostic.appliedSlotCount = uniqueCount;
+    m_apiDiagnostic.appliedSlotCount = appliedCount;
     publishApiDiagnostic();
-    recordEvent(QStringLiteral("SYSTEM"), QStringLiteral("API_SYNC"), snapshotDetail,
-                QStringLiteral("DONE"));
+    recordEvent(QStringLiteral("SYSTEM"), QStringLiteral("API_SYNC"), QStringLiteral("Applied %1 parking slots").arg(appliedCount), QStringLiteral("DONE"));
 }
 
 void ParkingController::publishApiDiagnostic()
@@ -2171,15 +1085,8 @@ void ParkingController::applyParkingSlotDetail(
         refreshAlert();
         return;
     }
-    const QString mappedSlotId = m_slotIdMapper.toZoneId(slot.slotId);
-    if (mappedSlotId.isEmpty()) {
-        emit slotDetailFailed(requestedSlotId, QStringLiteral("Server returned unmapped slot ID"));
-        refreshAlert();
-        return;
-    }
-    const QString slotId = normalizeParkingSlotId(mappedSlotId);
+    const QString slotId = normalizeParkingSlotId(slot.slotId);
     m_state.slotPlateNumbers.insert(slotId, slot.plateNumber);
-    m_state.slotSessionIds.insert(slotId, slot.sessionId);
     QList<ParkingImageResource> images;
     for (ParkingImageResource image : slot.images) { image.url = resolveApiUrl(image.url); images.append(image); }
     if (images.isEmpty()) m_state.slotImages.remove(slotId); else m_state.slotImages.insert(slotId, images);
@@ -2231,28 +1138,15 @@ void ParkingController::applyParkingSessionImages(
 
 void ParkingController::resetSlotsForSnapshot()
 {
-    m_state.evSlots.clear();
-    m_state.parkingSlots.clear();
-    m_state.slotImages.clear();
-    m_state.slotPlateNumbers.clear();
-    m_state.slotSessionIds.clear();
+    m_state.evSlots.clear(); m_state.parkingSlots.clear(); m_state.slotImages.clear(); m_state.slotPlateNumbers.clear();
 }
 
 void ParkingController::requestSlotDetail(const QString &rawSlotId)
 {
     const QString slotId = normalizeParkingSlotId(rawSlotId);
     if (!m_apiClient) { emit slotDetailReady(slotId); return; }
-    
-    QString serverSlotId = m_slotIdMapper.toServerSlotId(slotId);
-    if (serverSlotId.isEmpty()) {
-        serverSlotId = slotId; // fallback
-    }
-    // Backward compatibility for passthrough mode (e.g. EV-01 -> EV01)
-    if (serverSlotId.startsWith(QStringLiteral("EV-")) || serverSlotId.startsWith(QStringLiteral("P-"))) {
-        serverSlotId.remove(QLatin1Char('-'));
-    }
-
-    QString path = m_slotDetailPath; path.replace(QStringLiteral("{slot_id}"), serverSlotId);
+    QString compact = slotId; compact.remove(QLatin1Char('-'));
+    QString path = m_slotDetailPath; path.replace(QStringLiteral("{slot_id}"), compact);
     if (m_pendingDetailRequests.contains(path)) {
         emit statusMessageChanged(QStringLiteral("%1 evidence request is already in progress").arg(slotId));
         return;
@@ -2265,10 +1159,6 @@ void ParkingController::requestSlotDetail(const QString &rawSlotId)
 void ParkingController::replaceViewState(const ParkingViewState &state)
 {
     m_state = state;
-    // replaceViewState() is used by the local simulation/test path. It must
-    // not be mistaken for a server-provided capacity snapshot.
-    m_state.serverSlotCount = 0;
-    m_state.hasServerSnapshot = false;
     notifyStateChanged();
 }
 
@@ -2303,11 +1193,6 @@ void ParkingController::applyParkingSlotUpdate(const QString &slotId, SlotState 
         updated.visual = deriveSlotVisualState(state, state == SlotState::Occupied, false);
     }
     m_state.parkingSlots[slotId] = updated;
-    if (state == SlotState::Vacant) {
-        m_state.slotPlateNumbers.remove(slotId);
-        m_state.slotImages.remove(slotId);
-        m_state.slotSessionIds.remove(slotId);
-    }
     notifyStateChanged();
 }
 
@@ -2380,15 +1265,11 @@ void ParkingController::recordEvent(const QString &zone, const QString &eventTyp
         event.status = QStringLiteral("REJECTED");
     } else {
         event.sourceId = channelId.isEmpty() ? zone : channelId;
-        if (channelId.isEmpty()) {
-            event.evidenceSlotId = resolveParkingZoneId(zone);
-        }
         event.eventType = eventType;
         event.message = message;
         event.status = status;
     }
     event.ackState = eventAckStateFromStatus(event.status);
-    rememberEventEvidence(event);
     emit eventLogged(event);
 }
 
@@ -2416,30 +1297,186 @@ void ParkingController::clearAlarms()
     recordEvent(QStringLiteral("ALL"), QStringLiteral("ALARM_ACK"), cleared ? QStringLiteral("Active alarms acknowledged") : QStringLiteral("No alarms to clear"), QStringLiteral("ACKED"));
 }
 
-void ParkingController::applyManualJsonMessage(const QJsonObject &json)
+void ParkingController::processIncomingMessage(const QString &message)
 {
-    const QString eventType = json.value(QStringLiteral("event_type")).toString().trimmed().toUpper();
-    emit statusMessageChanged(QStringLiteral("Manual RX JSON: ") + eventType);
+    const ParsedIncomingMessage parsed = IncomingMessageAdapter::parse(message);
+    emit statusMessageChanged(QStringLiteral("Last RX: ") + parsed.raw);
 
-    const ServerFireEvent fireEvent = ServerFireEventAdapter::parse(json);
-    if (fireEvent.action == ServerFireEventAction::Invalid) {
-        recordEvent(fireEvent.channelId.isEmpty() ? QStringLiteral("SYSTEM") : fireEvent.channelId,
-                    QStringLiteral("MQTT_FIRE_CONTRACT_ERROR"),
-                    QStringLiteral("manual: ") + fireEvent.errorMessage,
-                    QStringLiteral("REJECTED"));
-        return;
-    }
-    if (fireEvent.action != ServerFireEventAction::NotFire) {
-        applyChannelFireEvent(fireEvent, QStringLiteral("manual"), false);
+    if (!parsed.isValid()) {
+        recordEvent(QStringLiteral("SYSTEM"), QStringLiteral("RX_ERROR"),
+                    parsed.errorMessage, QStringLiteral("REJECTED"));
         return;
     }
 
-    if (applyServerParkingEvent(json, QStringLiteral("manual"))) {
+    const QString &slotId = parsed.sourceId;
+    const QString &value = parsed.value;
+    switch (parsed.kind) {
+    case IncomingMessageKind::NormalizedEvent: {
+        if (!isFireLifecycleEventType(parsed.eventType)) {
+            recordEvent(slotId, parsed.eventType, parsed.message, parsed.status);
+            return;
+        }
+
+        const QString channelId = normalizeCameraChannelId(slotId);
+        if (channelId.isEmpty()) {
+            recordEvent(slotId, parsed.eventType, parsed.message, parsed.status);
+            return;
+        }
+
+        const QString eventType = parsed.eventType.trimmed().toUpper();
+        if (eventType == QStringLiteral("FIRE_CLEARED")) {
+            if (m_state.fireChannels.remove(channelId) > 0) {
+                notifyStateChanged();
+            }
+        } else if (eventType != QStringLiteral("FIRE_ACKNOWLEDGED")
+                   && eventType != QStringLiteral("FIRE_ALARM_ACK")) {
+            if (!m_state.fireChannels.contains(channelId)) {
+                m_state.fireChannels.insert(channelId);
+                notifyStateChanged();
+            }
+        }
+        recordEvent(channelId, eventType, parsed.message, parsed.status);
         return;
     }
 
-    recordEvent(QStringLiteral("SYSTEM"), QStringLiteral("RX_UNSUPPORTED"),
-                QStringLiteral("Unsupported manual JSON message: ") + eventType,
+    case IncomingMessageKind::ParkingSlot: {
+        if (value == QStringLiteral("FIRE")
+            || value == QStringLiteral("FIRE_SUSPECTED")) {
+            recordEvent(QStringLiteral("SYSTEM"),
+                        QStringLiteral("FIRE_CHANNEL_ERROR"),
+                        QStringLiteral("Parking-slot messages cannot carry fire state: ")
+                            + parsed.raw,
+                        QStringLiteral("REJECTED"));
+            return;
+        }
+        const SlotState state = slotStateFromText(value);
+        applyParkingSlotUpdate(slotId, state);
+        recordEvent(slotId, slotStateText(state),
+                    QStringLiteral("Parking slot state updated from RX message"),
+                    QStringLiteral("RECORDED"));
+        return;
+    }
+
+    case IncomingMessageKind::HallSensor: {
+        if (value == QStringLiteral("ERROR") || value == QStringLiteral("FAILED")) {
+            applyParkingSlotUpdate(slotId, SlotState::SensorError);
+            recordEvent(slotId, QStringLiteral("HALL_SENSOR_ERROR"),
+                        QStringLiteral("Hall sensor error received"),
+                        QStringLiteral("OPEN"));
+            return;
+        }
+        if (value == QStringLiteral("ACKED")) {
+            applyParkingSlotUpdate(slotId, SlotState::Acked);
+            recordEvent(slotId, QStringLiteral("HALL_SENSOR_ACK"),
+                        QStringLiteral("Hall sensor alarm acknowledged from RX message"),
+                        QStringLiteral("ACKED"));
+            return;
+        }
+        if (value == QStringLiteral("CLEAR")) {
+            ParkingSlotInfo &slot = m_state.parkingSlots[slotId];
+            slot.visual.alarm = SlotAlarmKind::None;
+            slot.visual.alarmAcknowledged = false;
+            slot.state = slot.visual.occupancy == SlotOccupancy::Occupied
+                ? SlotState::Occupied : SlotState::Vacant;
+            notifyStateChanged();
+            recordEvent(slotId, QStringLiteral("HALL_SENSOR_CLEAR"),
+                        QStringLiteral("Hall sensor alarm cleared from RX message"),
+                        QStringLiteral("CLEARED"));
+            return;
+        }
+        const SlotState state = slotStateFromText(value);
+        applyParkingSlotUpdate(slotId, state);
+        recordEvent(slotId, QStringLiteral("HALL_SENSOR_CHANGED"),
+                    QStringLiteral("Hall sensor state updated from RX message"),
+                    QStringLiteral("RECORDED"));
+        return;
+    }
+
+    case IncomingMessageKind::EvAlert:
+        if (value == QStringLiteral("NON_EV")) {
+            applyEvSlotUpdate(slotId, SlotState::NonEvAlert,
+                              QStringLiteral("UNKNOWN"), false,
+                              QStringLiteral("00:00"), QStringLiteral("NON_EV_ALERT"));
+            recordEvent(slotId, QStringLiteral("NON_EV_ALERT"),
+                        QStringLiteral("Non-EV alert received"), QStringLiteral("OPEN"));
+            return;
+        }
+        if (value == QStringLiteral("OVERTIME")) {
+            applyEvSlotUpdate(slotId, SlotState::OvertimeAlert,
+                              QStringLiteral("UNKNOWN"), true,
+                              QStringLiteral("02:00+"), QStringLiteral("OVERTIME_ALERT"));
+            recordEvent(slotId, QStringLiteral("OVERTIME_ALERT"),
+                        QStringLiteral("Overtime alert received"), QStringLiteral("OPEN"));
+            return;
+        }
+        if (value == QStringLiteral("ACKED")) {
+            applyEvSlotUpdate(slotId, SlotState::Acked,
+                              QStringLiteral("UNKNOWN"), true,
+                              QStringLiteral("00:00"), QStringLiteral("ACKED"));
+            recordEvent(slotId, QStringLiteral("ALARM_ACK"),
+                        QStringLiteral("Alarm acknowledged from RX message"),
+                        QStringLiteral("ACKED"));
+            return;
+        }
+        if (value == QStringLiteral("CLEAR")) {
+            EvSlotInfo &slot = m_state.evSlots[slotId];
+            slot.visual.alarm = SlotAlarmKind::None;
+            slot.visual.alarmAcknowledged = false;
+            slot.state = slot.visual.occupancy == SlotOccupancy::Occupied
+                ? SlotState::Occupied : SlotState::Vacant;
+            slot.alarmText = QStringLiteral("NORMAL");
+            notifyStateChanged();
+            recordEvent(slotId, QStringLiteral("ALARM_CLEAR"), QStringLiteral("Alarm cleared from RX message"), QStringLiteral("CLEARED"));
+            return;
+        }
+        break;
+
+    case IncomingMessageKind::FireAlarm:
+    {
+        const QString channelId = normalizeCameraChannelId(slotId);
+        if (channelId.isEmpty()) {
+            recordEvent(QStringLiteral("SYSTEM"),
+                        QStringLiteral("FIRE_CHANNEL_ERROR"),
+                        QStringLiteral("Fire message requires CH1~CH4: ") + parsed.raw,
+                        QStringLiteral("REJECTED"));
+            return;
+        }
+
+        if (value == QStringLiteral("CLEAR")) {
+            if (m_state.fireChannels.remove(channelId) > 0) {
+                notifyStateChanged();
+            }
+            recordEvent(channelId, QStringLiteral("FIRE_CLEARED"),
+                        QStringLiteral("Fire state cleared on ") + channelId,
+                        QStringLiteral("CLEARED"));
+            return;
+        }
+        if (value == QStringLiteral("ACKED")) {
+            recordEvent(channelId, QStringLiteral("FIRE_ACKNOWLEDGED"),
+                        QStringLiteral("Fire warning acknowledged on ") + channelId,
+                        QStringLiteral("ACKED"));
+            return;
+        }
+
+        if (!m_state.fireChannels.contains(channelId)) {
+            m_state.fireChannels.insert(channelId);
+            notifyStateChanged();
+        }
+        recordEvent(channelId, QStringLiteral("FIRE_SUSPECTED"),
+                    QStringLiteral("Fire suspected on ") + channelId,
+                    QStringLiteral("OPEN"));
+        return;
+    }
+
+    case IncomingMessageKind::Unsupported:
+        break;
+
+    case IncomingMessageKind::Invalid:
+        return;
+    }
+
+    recordEvent(slotId, QStringLiteral("RX_UNSUPPORTED"),
+                QStringLiteral("Unsupported message: ") + parsed.raw,
                 QStringLiteral("REJECTED"));
 }
 

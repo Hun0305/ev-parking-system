@@ -1,6 +1,6 @@
 # Pi Server 트러블슈팅 기록
 
-- 기준일: 2026-08-24
+- 기준일: 2026-08-01
 - 대상: Raspberry Pi C++ 서버, Mosquitto, Hanwha Vision Camera, STM32 UART, SQLite, Qt 연동
 - 원칙: 새 장애가 발생하면 이 문서에 증상, 확인 명령, 원인, 해결, 재발 방지를 추가한다.
 
@@ -48,11 +48,11 @@ tail -n 0 -F data/logs/pi-server.log \
 
 ## 3. HTTP API 접속 거부
 
-### TS-001 Pi IP는 맞지만 HTTPS 접속 불가
+### TS-001 Pi IP는 맞지만 8080 접속 불가
 
 - 상태: 해결 방법 확인
-- 증상: `https://<PI_HOST>:<HTTPS_PORT>` 또는 Qt 연결이 즉시 거부된다.
-- 확인 결과 사례: Pi IP는 맞았지만 `pi-server` 프로세스와 HTTPS listener가 없었다.
+- 증상: `http://<PI_IP>:8080` 또는 Qt 연결이 즉시 거부된다.
+- 확인 결과 사례: Pi IP는 `172.20.32.97`이었지만 `pi-server` 프로세스와 8080 listener가 없었다.
 - 원인: IP 문제가 아니라 서버 프로세스가 실행되지 않은 상태였다.
 
 확인:
@@ -60,27 +60,26 @@ tail -n 0 -F data/logs/pi-server.log \
 ```bash
 hostname -I
 pgrep -a pi-server
-ss -lntp | grep ':8443'
-curl --cacert <CA_CERT> --max-time 3 \
-  https://<PI_HOST>:8443/api/v1/health
+ss -lntp | grep ':8080'
+curl --max-time 3 http://127.0.0.1:8080/api/v1/health
 ```
 
 해결:
 
 ```bash
-./run_server.sh
+./set.sh
 ```
 
 정상 확인 주소:
 
 ```text
-https://<PI_HOST>:8443/api/v1/health
+http://<PI_IP>:8080/api/v1/health
 ```
 
 정상 응답:
 
 ```json
-{"success":true,"status":"ok"}
+{"service":"pi-server","status":"ok"}
 ```
 
 루트 `/`는 health API가 아니다. Qt의 API base URL과 실제 Pi IP가 일치하는지도 확인한다.
@@ -94,7 +93,7 @@ https://<PI_HOST>:8443/api/v1/health
 - 확인 결과 사례:
   - `parking/fire/ch01` retained 메시지 존재
   - `event_id`, `event_type=FIRE_SUSPECTED`, `channel_id=ch01` 존재
-  - Pi HTTPS health API는 `200 OK`
+  - Pi HTTP API 8080은 `200 OK`
   - Qt PC가 Pi Mosquitto 1883에 TCP 연결된 상태
 
 Pi 확인:
@@ -102,8 +101,7 @@ Pi 확인:
 ```bash
 mosquitto_sub -h localhost -v -C 1 -W 2 -t 'parking/fire/ch01'
 ss -ntp | grep ':1883'
-curl --cacert <CA_CERT> --max-time 3 \
-  https://<PI_HOST>:8443/api/v1/health
+curl --max-time 3 http://<PI_IP>:8080/api/v1/health
 ```
 
 최소 화재 계약:
@@ -169,7 +167,7 @@ mosquitto_pub -h localhost -q 1 \
 
 가짜 UART를 일반 FIFO로 만들면 `tcgetattr failed: Inappropriate ioctl for device`가
 발생한다. 운영 `UartDriver`는 termios 장치를 요구하므로
-`tools/fire/fake_fire_sensor.sh --create-pty <server_device> <writer_device>`로 socat PTY pair를
+`tools/fake_fire_sensor.sh --create-pty <server_device> <writer_device>`로 socat PTY pair를
 만들어야 한다. 서버는 `server_device`를 열고 테스트 프레임은 `writer_device`로 보낸다.
 
 ## 5. 홀센서와 점유 처리
@@ -178,12 +176,12 @@ mosquitto_pub -h localhost -q 1 \
 
 - 상태: 설정 확인 필요
 - 증상: `parking/sensor/hall`에 메시지를 발행해도 DB 세션과 타이머가 시작되지 않는다.
-- 원인 사례: `.env.public`의 `HALL_MQTT_INPUT_ENABLED=false`.
+- 원인 사례: `.env.fire.local`의 `HALL_MQTT_INPUT_ENABLED=false`.
 
 확인:
 
 ```bash
-grep '^HALL_MQTT_INPUT_ENABLED' .env.public 2>/dev/null
+grep '^HALL_MQTT_INPUT_ENABLED' .env.fire.local .env.example 2>/dev/null
 ```
 
 실제 서버 흐름을 시험하려면 서버 시작 전에 다음을 적용한다.
@@ -296,9 +294,8 @@ sqlite3 -header -column data/db/parking.db 'SELECT * FROM VEHICLE;'
 
 ### TS-011 BestShot이 저장되지 않음
 
-- 상태: 현재 운영 기본은 `BESTSHOT_ENABLED=false`이므로 저장되지 않는 것이 정상
+- 상태: 카메라 이벤트 조건과 DB 세션 상태에 따라 다름
 - 확인 항목:
-  - BestShot을 의도했다면 `BESTSHOT_ENABLED=true`인가.
   - RTSP metadata track에서 vehicle/plate ImageRef가 실제 발생했는가.
   - 카메라 HTTPS Digest 다운로드가 성공했는가.
   - vehicle과 plate의 object/channel 상관관계가 맞는가.
@@ -367,50 +364,6 @@ Failed to change working directory to .../cmake-build
 `std::vector<uint8_t>` 확장 과정에서 `-Wfree-nonheap-object`가 출력된 사례가 있었다.
 경고만으로 성공 빌드를 실패로 판단하지 않는다. 다만 sanitizer 또는 단위 테스트에서 실제
 메모리 오류가 나오면 별도 결함으로 처리한다.
-
-### TS-021 `/dev/parking_alert` 미생성 및 `class_create` 빌드 실패
-
-- 발생일: 2026-08-24
-- 상태: 해결
-- 증상:
-  - 서버 시작 시 `open /dev/parking_alert: No such file or directory`가 출력된다.
-  - 커널 모듈 설치 중 `macro 'class_create' requires 2 arguments` 컴파일 오류가 발생한다.
-- 영향 범위: 서버 핵심 기능은 계속 실행되지만 주차 위반 상태를 문자 디바이스에 투영하지
-  못한다.
-- 확인 결과:
-  - 실행 커널은 `6.1.21-v8+`이고 해당 커널 헤더는 설치돼 있었다.
-  - `parking_alert` 모듈과 `/dev/parking_alert` 장치 노드는 존재하지 않았다.
-  - 커널은 GCC 10으로 빌드됐고 모듈은 GCC 16으로 빌드됐다는 경고도 있었지만 직접적인
-    실패 원인은 아니었다.
-- 원인: Linux 6.4에서 `class_create()`의 모듈 소유자 인자가 제거됐는데, 드라이버가 최신
-  커널 형식인 `class_create(name)`만 사용해 Linux 6.1 헤더와 호환되지 않았다.
-- 해결: `LINUX_VERSION_CODE`를 기준으로 Linux 6.4 미만에서는
-  `class_create(THIS_MODULE, name)`, 6.4 이상에서는 `class_create(name)`을 호출한다.
-
-확인 및 설치:
-
-```bash
-uname -r
-test -d /lib/modules/$(uname -r)/build
-./tools/install_parking_alert_driver.sh
-lsmod | grep '^parking_alert'
-ls -l /dev/parking_alert
-./cmake-build/parking-alert-ctl status
-```
-
-- 검증 결과:
-  - `parking_alert.ko` 빌드와 `modprobe`가 성공했다.
-  - `/dev/parking_alert`가 `root:dialout` 문자 디바이스로 생성됐다.
-  - `parking-alert-ctl`의 슬롯 bit 설정·해제 후 `active_mask=0x00000000`을 확인했다.
-- 재발 방지:
-  - 커널 모듈은 실행 중인 커널의 헤더로 별도 빌드한다.
-  - 커널 API 변경 지점에는 버전 호환 분기를 유지한다.
-  - 모듈 설치 후 이미 실행 중인 서버는 재시작해야 드라이버 연결을 다시 시도한다.
-- 관련 파일/이슈:
-  - `driver/parking_alert/parking_alert.c`
-  - `tools/install_parking_alert_driver.sh`
-  - `docs/PARKING_ALERT_DRIVER.md`
-  - EVDA-239
 
 ## 9. Git 작업 오류
 

@@ -4,7 +4,6 @@
 
 #include <QList>
 #include <QString>
-#include <QJsonArray>
 #include <QStringList>
 
 namespace ParkingMockData {
@@ -18,6 +17,6 @@ struct EventRecord {
 
 ParkingViewState initialViewState();
 QList<EventRecord> initialEvents();
-QJsonArray sampleIncomingMessages();
+QStringList sampleIncomingMessages();
 
 } // namespace ParkingMockData

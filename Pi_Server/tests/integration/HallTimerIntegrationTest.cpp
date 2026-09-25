@@ -92,46 +92,37 @@ int main(int argc, char* argv[]) {
         require(argc >= 2, "parking slot fixture path is required");
         auto configs = parking::ParkingSlotConfigLoader::loadFromFile(argv[1]);
 
-        // 같은 슬롯의 같은 상태 재전송만 병합한다. OCCUPIED→VACANT처럼 의미가
-        // 다른 전이는 순서를 보존해야 DB 세션 종료가 유실되지 않는다.
-        sensor::HallParkingWorkQueue bounded_queue(2);
+        // bounded queue 정책은 같은 슬롯의 최신 상태를 병합하고, 다른 슬롯이
+        // capacity를 넘을 때만 거부해야 한다.
+        sensor::HallParkingWorkQueue bounded_queue(1);
         sensor::HallParkingWorkItem occupied;
         occupied.event.slotId = "EV01";
         occupied.event.state = parking::ParkingSensorState::Occupied;
         require(bounded_queue.push(occupied) ==
                     sensor::HallParkingWorkQueue::PushResult::Added,
                 "first hall work item was not queued");
-        require(bounded_queue.push(occupied) ==
-                    sensor::HallParkingWorkQueue::PushResult::Coalesced &&
-                    bounded_queue.size() == 1,
-                "same-slot duplicate state was not coalesced");
         auto vacant = occupied;
         vacant.event.state = parking::ParkingSensorState::Vacant;
         require(bounded_queue.push(vacant) ==
-                    sensor::HallParkingWorkQueue::PushResult::Added &&
-                    bounded_queue.size() == 2,
-                "opposite slot transition was incorrectly coalesced");
+                    sensor::HallParkingWorkQueue::PushResult::Coalesced &&
+                    bounded_queue.size() == 1,
+                "same-slot latest state was not coalesced");
         auto other_slot = occupied;
         other_slot.event.slotId = "EV02";
         require(bounded_queue.push(other_slot) ==
                     sensor::HallParkingWorkQueue::PushResult::Full &&
                     bounded_queue.size() == bounded_queue.capacity(),
                 "distinct-slot overflow exceeded bounded capacity");
-        const auto first_queued = bounded_queue.pop();
-        const auto second_queued = bounded_queue.pop();
-        require(first_queued && second_queued &&
-                    first_queued->event.state ==
-                        parking::ParkingSensorState::Occupied &&
-                    second_queued->event.state ==
-                        parking::ParkingSensorState::Vacant,
-                "queue did not preserve OCCUPIED to VACANT order");
+        const auto latest = bounded_queue.pop();
+        require(latest && latest->event.state ==
+                              parking::ParkingSensorState::Vacant,
+                "coalesced queue did not retain the latest VACANT state");
 
         database::EventDatabase database(temporary.database);
         const std::filesystem::path sql_dir{PARKING_TIMER_TEST_SQL_DIR};
         database.initialize(sql_dir / "schema.sql", sql_dir / "seed.sql");
 
         app::AppConfig app_config{};
-        app_config.parking_occupancy_source = "HALL";
         app_config.parking_occupancy_confirm_ms = 40;
         app_config.iva_areas.push_back(
             {"EV01", "EV01", "ch01", 0.0, 0.0, 1.0, 1.0});
@@ -153,7 +144,6 @@ int main(int argc, char* argv[]) {
                                 std::string_view, std::string_view) {
             std::lock_guard lock(event_mutex);
             published_events.emplace_back(type);
-            return true;
         });
         parking_timer::ParkingSlotManager timer_manager(
             database, events, 80ms,
@@ -163,7 +153,6 @@ int main(int argc, char* argv[]) {
                            session_id, "OVERSTAY_EVIDENCE")
                     .value_or("");
             });
-        require(timer_manager.start(), "parking timer worker did not start");
 
         event::SystemEventReporter::Config reporter_config;
         reporter_config.duplicate_window = 1s;
@@ -196,9 +185,7 @@ int main(int argc, char* argv[]) {
         std::mutex transition_mutex;
         std::vector<parking::ParkingTransitionResult> capture_transitions;
         parking::EvidenceCaptureWorker::Config evidence_config;
-        // Keep the early-departure scenario independent from scheduler timing:
-        // its assertion must observe only the entry evidence before VACANT.
-        evidence_config.overstayDelay = 10s;
+        evidence_config.overstayDelay = 80ms;
         parking::EvidenceCaptureWorker evidence_worker(
             snapshots, database, evidence_config,
             [&](const parking::EvidenceCaptureResult& result) {
@@ -309,8 +296,6 @@ int main(int argc, char* argv[]) {
         require(database.listSessionImages(static_cast<int>(first->id), first_images) &&
                     first_images.empty(),
                 "canceled overstay evidence was created after VACANT");
-        require(evidence_worker.updateOverstayDelay(80ms) == 0,
-                "canceled session retained an overstay evidence job");
         database::ParkingSlotView slot;
         require(database.getParkingSlot("EV01", slot) &&
                     slot.parking_status == "VACANT",
@@ -390,9 +375,6 @@ int main(int argc, char* argv[]) {
                     return !database.findActiveBySlot("EV01").has_value();
                 }, 1s),
                 "violating session departure did not finish before next entry");
-
-        require(evidence_worker.updateOverstayDelay(10s) == 0,
-                "ended violation session retained an overstay evidence job");
 
         // 일반 차량은 OCR 직후 즉시 위반이며, 출차해도 시작 증거를 보존한다.
         require(service.handleLine("SENSOR:HALL01:OCCUPIED:6"),

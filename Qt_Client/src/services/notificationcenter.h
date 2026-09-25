@@ -10,7 +10,6 @@
 
 struct NotificationRecord {
     QString id;
-    QString eventId;
     QString time;
     QString sourceId;
     QString eventType;
