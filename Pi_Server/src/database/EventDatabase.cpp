@@ -1,0 +1,314 @@
+#include "database/EventDatabase.hpp"
+
+#include "database/db_manager.h"
+#include "util/Logger.hpp"
+
+#include <sstream>
+
+namespace database {
+
+EventDatabase::EventDatabase()
+    : opened_(false), db_(nullptr) {
+}
+
+EventDatabase::~EventDatabase() {
+    close();
+}
+
+bool EventDatabase::open(const std::string& db_path) {
+    // C DB manager가 전역 연결 하나를 사용하므로 모든 접근을 같은 mutex로 직렬화한다.
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    if (opened_) {
+        // 캐시된 statement는 이전 연결에 묶여 있다. 연결을 닫기 전에
+        // finalize하지 않으면 dangling handle이 남는다.
+        clearStatementCacheUnlocked();
+        db_close();
+        opened_ = false;
+    }
+    runtime_schema_ready_ = false;
+    occupancy_schema_ready_ = false;
+
+    db_path_ = db_path;
+    if (db_open(db_path_.c_str()) < 0) {
+        util::logError("MVP parking DB open failed: " + db_path_);
+        return false;
+    }
+
+    db_ = db_native_handle();
+    opened_ = true;
+    // 연결 정책은 어느 생성자를 거쳤든 항상 여기서 적용한다. 경로를 받는
+    // 생성자에만 두었을 때 기본 생성자 + open() 경로(main.cpp)가 통째로
+    // 누락됐다. 근거: docs/PERFORMANCE_PROFILING_REPORT_1H.md
+    applyConnectionPragmasUnlocked();
+    util::logInfo("MVP parking DB opened: " + db_path_);
+    return true;
+}
+
+void EventDatabase::close() {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    runtime_schema_ready_ = false;
+    occupancy_schema_ready_ = false;
+    if (opened_) {
+        // sqlite3_close 전에 모든 statement를 finalize해야 한다.
+        clearStatementCacheUnlocked();
+        db_close();
+        db_ = nullptr;
+        opened_ = false;
+    }
+}
+
+bool EventDatabase::runtimeSchemaReady() const noexcept {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    return opened_ && db_ != nullptr && runtime_schema_ready_;
+}
+
+bool EventDatabase::occupancySchemaReady() const noexcept {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    return opened_ && db_ != nullptr && runtime_schema_ready_ &&
+           occupancy_schema_ready_;
+}
+
+bool EventDatabase::insertEvent(const EventRecord& record) {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    if (!opened_) {
+        util::logError("MVP parking DB insert failed: DB is not open");
+        return false;
+    }
+
+    const char* slot_id = record.slot_id.empty() ? nullptr : record.slot_id.c_str();
+    bool success = true;
+
+    // MQTT 이벤트는 아직 주차 세션 판정 전이므로 session_id 없이 증거 이미지를 기록한다.
+    if (!record.snapshot_path.empty()) {
+        const int inserted = record.roi_revision > 0
+            ? db_insert_image_log_with_roi(
+                  -1, record.snapshot_path.c_str(), nullptr, "NONE", nullptr,
+                  record.applied_roi.x, record.applied_roi.y,
+                  record.applied_roi.width, record.applied_roi.height,
+                  record.roi_revision)
+            : db_insert_image_log(
+                  -1, record.snapshot_path.c_str(), nullptr, "NONE", nullptr);
+        if (inserted < 0) {
+            util::logError("MVP IMAGE_LOG insert failed: " + record.snapshot_path);
+            success = false;
+        }
+    }
+
+    // MVP EVENT_LOG schema에 없는 카메라 상세 필드는 사람이 읽을 수 있는 message에 담는다.
+    std::string message =
+        "camera_id=" + record.camera_id +
+        " channel_id=" + record.channel_id +
+        " source=" + record.source_type +
+        " snapshot=" + record.snapshot_path;
+
+    if (db_insert_event_log(
+            -1,
+            slot_id,
+            record.event_type.c_str(),
+            message.c_str()) < 0) {
+        util::logError("MVP EVENT_LOG insert failed: " + record.event_type);
+        success = false;
+    }
+
+    return success;
+}
+
+bool EventDatabase::insertSystemEvent(const std::string& event_type,
+                                      const std::string& slot_id,
+                                      const std::string& message) {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    if (!opened_ || event_type.empty()) {
+        util::logError("System EVENT_LOG insert failed: DB closed or empty type");
+        return false;
+    }
+    const char* optional_slot = slot_id.empty() ? nullptr : slot_id.c_str();
+    if (db_insert_event_log(-1, optional_slot, event_type.c_str(),
+                            message.c_str()) < 0) {
+        util::logError("System EVENT_LOG insert failed: " + event_type);
+        return false;
+    }
+    return true;
+}
+
+bool EventDatabase::createEntryWithBestShot(const std::string& slot_id,
+                                            const std::string& image_path,
+                                            const std::string& object_id,
+                                            int* session_id) {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    if (!opened_ || slot_id.empty() || image_path.empty() || session_id == nullptr)
+        return false;
+
+    // 차량 BestShot을 입차 근거로 사용해 주차면, 세션, 이미지, 이벤트를 차례로 만든다.
+    if (db_update_slot_status(slot_id.c_str(), "OCCUPIED") < 0 ||
+        db_create_parking_session(-1, slot_id.c_str(), nullptr, session_id) < 0 ||
+        db_insert_image_log(*session_id, image_path.c_str(), nullptr,
+                            "BESTSHOT_VEHICLE", nullptr) < 0) {
+        util::logError("BestShot entry DB update failed: slot=" + slot_id);
+        return false;
+    }
+
+    std::string message = "vehicle BestShot object_id=" + object_id +
+                          " image=" + image_path;
+    if (db_insert_event_log(*session_id, slot_id.c_str(), "VEHICLE_ENTERED",
+                            message.c_str()) < 0) {
+        util::logError("BestShot entry event insert failed: slot=" + slot_id);
+        return false;
+    }
+    return true;
+}
+
+bool EventDatabase::attachVehicleBestShot(int session_id,
+                                          const std::string& image_path,
+                                          const std::string& object_id) {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    if (!opened_ || session_id < 0 || image_path.empty()) return false;
+    if (db_insert_image_log(session_id, image_path.c_str(), nullptr,
+                            "BESTSHOT_VEHICLE", nullptr) < 0) {
+        util::logError("Vehicle BestShot DB insert failed: session=" +
+                       std::to_string(session_id));
+        return false;
+    }
+    std::string message = "vehicle BestShot object_id=" + object_id +
+                          " image=" + image_path;
+    db_insert_event_log(session_id, nullptr, "VEHICLE_ENTERED", message.c_str());
+    return true;
+}
+
+bool EventDatabase::createEntryWithSnapshot(const std::string& slot_id,
+                                            const std::string& image_path,
+                                            const std::string& source_id,
+                                            int* session_id) {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    if (!opened_ || slot_id.empty() || image_path.empty() || session_id == nullptr)
+        return false;
+
+    if (db_update_slot_status(slot_id.c_str(), "OCCUPIED") < 0 ||
+        db_create_parking_session(-1, slot_id.c_str(), nullptr, session_id) < 0 ||
+        db_insert_image_log(*session_id, image_path.c_str(), nullptr,
+                            "HALL_ENTRY", nullptr) < 0) {
+        util::logError("Hall entry DB update failed: slot=" + slot_id);
+        return false;
+    }
+    const std::string message = "hall sensor=" + source_id +
+                                " snapshot=" + image_path;
+    return db_insert_event_log(*session_id, slot_id.c_str(), "HALL_OCCUPIED",
+                               message.c_str()) == 0;
+}
+
+bool EventDatabase::attachPlateBestShot(int session_id,
+                                        const std::string& image_path,
+                                        const std::string& plate_text) {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    if (!opened_ || session_id < 0 || image_path.empty()) return false;
+    // 번호판 문자열이 없더라도 이미지 자체는 해당 입차 세션의 증거로 보존한다.
+    const char* ocr = plate_text.empty() ? nullptr : plate_text.c_str();
+    if (db_insert_image_log(session_id, image_path.c_str(), nullptr,
+                            "BESTSHOT_PLATE", ocr) < 0) {
+        util::logError("Plate BestShot DB insert failed: session=" +
+                       std::to_string(session_id));
+        return false;
+    }
+    return true;
+}
+
+bool EventDatabase::attachEnhancedPlateImage(
+    const std::string& image_path,
+    const std::string& enhanced_image_path) {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    if (!opened_ || image_path.empty() || enhanced_image_path.empty()) return false;
+    if (db_update_image_enhanced_by_path(image_path.c_str(),
+                                         enhanced_image_path.c_str()) < 0) {
+        util::logError("Enhanced IMAGE_LOG update failed: " + image_path);
+        return false;
+    }
+    return true;
+}
+
+std::string EventDatabase::applyPlateOcr(int session_id,
+                                         const std::string& slot_id,
+                                         const std::string& image_path,
+                                         const std::string& plate_number,
+                                         double confidence) {
+    return applyPlateOcrWithEntrance(
+               session_id, slot_id, image_path, plate_number, confidence,
+               30LL * 60LL * 1000LL, 0.85)
+        .classification;
+}
+
+namespace {
+int collectSlot(const DbParkingSlotRow* source, void* context) {
+    auto* rows = static_cast<std::vector<ParkingSlotView>*>(context);
+    ParkingSlotView row;
+    row.slot_id = source->slot_id;
+    row.slot_type = source->slot_type;
+    row.parking_status = source->parking_status;
+    row.sensor_type = source->sensor_type;
+    row.updated_at = source->updated_at;
+    row.session_id = source->has_active_session ? source->session_id : -1;
+    row.plate_number = source->plate_number;
+    row.entry_time = source->entry_time;
+    row.is_ev = source->has_vehicle_classification ? source->is_ev : -1;
+    rows->push_back(std::move(row));
+    return 0;
+}
+int collectImage(const DbImageRow* source, void* context) {
+    auto* rows = static_cast<std::vector<ImageView>*>(context);
+    ImageView row{source->image_id, source->session_id, source->original_path,
+                  source->enhanced_path, source->enhancement_type,
+                  source->evidence_reason, source->ocr_result,
+                  source->captured_at, {}, 0};
+    if (source->has_applied_roi) {
+        row.applied_roi = snapshot::NormalizedRoi{
+            source->roi_x, source->roi_y, source->roi_width,
+            source->roi_height};
+        row.roi_revision = source->roi_revision;
+    }
+    rows->push_back(std::move(row));
+    return 0;
+}
+}
+
+bool EventDatabase::listParkingSlots(std::vector<ParkingSlotView>& rows) {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    rows.clear();
+    return opened_ && db_visit_parking_slots(nullptr, collectSlot, &rows) >= 0;
+}
+
+bool EventDatabase::getParkingSlot(const std::string& slot_id, ParkingSlotView& row) {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    std::vector<ParkingSlotView> rows;
+    const int count = opened_ ? db_visit_parking_slots(slot_id.c_str(), collectSlot, &rows) : -1;
+    if (count != 1 || rows.empty()) return false;
+    row = std::move(rows.front());
+    return true;
+}
+
+bool EventDatabase::listSessionImages(int session_id, std::vector<ImageView>& rows) {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    rows.clear();
+    return opened_ && db_visit_session_images(session_id, collectImage, &rows) >= 0;
+}
+
+bool EventDatabase::getImage(int image_id, ImageView& row) {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    DbImageRow source;
+    if (!opened_ || db_get_image_by_id(image_id, &source) < 0) return false;
+    row = {source.image_id, source.session_id, source.original_path,
+           source.enhanced_path, source.enhancement_type,
+           source.evidence_reason, source.ocr_result, source.captured_at,
+           {}, 0};
+    if (source.has_applied_roi) {
+        row.applied_roi = snapshot::NormalizedRoi{
+            source.roi_x, source.roi_y, source.roi_width,
+            source.roi_height};
+        row.roi_revision = source.roi_revision;
+    }
+    return true;
+}
+
+bool EventDatabase::deleteSessionImageRecords(const int session_id) {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    return opened_ && session_id >= 0 && db_delete_session_images(session_id) >= 0;
+}
+
+}

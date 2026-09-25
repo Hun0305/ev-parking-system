@@ -1,0 +1,20 @@
+{
+  "Version": "1.0.0",
+  "Name": "SampleComponent",
+  "Attributes": [
+    {
+      "jpeg_path": "../res/capture.jpg",
+      "processed_jpeg_path": "../res/processed.jpg",
+      "channel_count": 4,
+      "default_channel": 0,
+      "processing_mode": "canny",
+      "blur_kernel_size": 3,
+      "canny_low_threshold": 100,
+      "canny_high_threshold": 200,
+      "jpeg_quality": 90,
+      "processing_min_interval_ms": 2500,
+      "processed_jpeg_cache_ttl_ms": 2500,
+      "opencv_thread_limit": 1
+    }
+  ]
+}

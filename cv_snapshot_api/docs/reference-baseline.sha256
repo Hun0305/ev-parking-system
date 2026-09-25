@@ -1,0 +1,7 @@
+# 2026-07-22 pre-implementation reference tree baseline
+# Algorithm: files sorted by relative path; SHA256 over repeated
+# UTF8(relative-path) + NUL + raw-file-content + LF.
+# These paths are read-only references and must remain unchanged.
+
+af5998b7ca4fd4e86cf16d2513c2ab53d7c56d48096349da4db203b128f54022  76 files  sdk/snapshot_jpeg
+c5fd5fe81278365abde3e4ef492ff1705db27cc04f4d427952c739cbcc49abba  9624 files  sdk/display_image_opencv
