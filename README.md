@@ -9,7 +9,6 @@
 </p>
 
 <p align="center">
-  <img alt="team" src="https://img.shields.io/badge/VEDA-4th--Team5-1f6feb" />
   <img alt="release" src="https://img.shields.io/badge/release-v1.0-2ea44f" />
   <img alt="stack" src="https://img.shields.io/badge/stack-C%2B%2B%20%7C%20Qt%20%7C%20STM32%20%7C%20OpenCV-orange" />
 </p>
@@ -34,9 +33,8 @@ STM32 (홀/불꽃 센서) → LoRa → Raspberry Pi 서버 (MQTT·Snapshot API·
                               Qt 관제 클라이언트 (RTSP 영상·주차 상태·화재 알림)
 ```
 
-VEDA 4th Team5 프로젝트의 4개 하위 시스템(`Pi_Server`, `Qt_Client`, `STM`, `cv_snapshot_api`)을
-하나의 저장소로 통합했습니다. 각 폴더는 원래 개별 저장소였으며, 현재는 이 저장소의 하위
-디렉터리로 관리됩니다.
+4개 하위 시스템(`Pi_Server`, `Qt_Client`, `STM`, `cv_snapshot_api`)을 하나의 저장소로
+통합했습니다. 각 폴더는 원래 개별 저장소였으며, 현재는 이 저장소의 하위 디렉터리로 관리됩니다.
 
 ## 구성
 
@@ -48,8 +46,6 @@ VEDA 4th Team5 프로젝트의 4개 하위 시스템(`Pi_Server`, `Qt_Client`, `
 각 하위 폴더의 상세 내용은 폴더 내 README.md를 참고하세요.
 
 ## v1.0 릴리즈 노트
-
-> 원본 저장소(`Pi_Server`, `Qt_Client`, `STM`)의 [v1.0 릴리즈](https://github.com/VEDA-4th-Team5/Pi_Server/releases/tag/v1.0)에 작성된 내용입니다.
 
 # v1.0 — 프로토타입 배포
 
