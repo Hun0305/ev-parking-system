@@ -2,10 +2,12 @@
 #include "RtspVideoItem.h"
 #include "auth/authclient.h"
 #include "dialogs/logindialog.h"
+#include "services/uifontscale.h"
 
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDir>
+#include <QIcon>
 #include <QSettings>
 #include <QTimer>
 #include <qqml.h>
@@ -122,9 +124,12 @@ int runMonitoringSession(QApplication &app, const AuthSession &session)
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
+    app.setWindowIcon(
+        QIcon(QStringLiteral(":/resources/icons/app-icon.png")));
     qmlRegisterType<RtspVideoItem>("Rtsp", 1, 0, "RtspVideoItem");
 
     ApiStartupOptions apiOptions = loadApiStartupOptions();
+    UiFontScale::initialize(app, apiOptions.localConfigPath);
     QString loginNotice;
     for (;;) {
         AuthSession session;

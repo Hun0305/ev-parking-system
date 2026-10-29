@@ -8,6 +8,8 @@
 #include <QMetaObject>
 #include <QTemporaryDir>
 
+#include <algorithm>
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -355,6 +357,18 @@ int main(int argc, char **argv)
     if (snapshotSlot.visual.vehicleClass != VehicleClass::Electric) return 76;
     controller.applyParkingSlotUpdate(QStringLiteral("P-99"), SlotState::Vacant);
     if (controller.state().serverSlotCount != 1) return 77;
+
+    const auto apiSyncCount = [&events]() {
+        return std::count_if(
+            events.cbegin(), events.cend(), [](const MonitoringEvent &event) {
+                return event.eventType == QStringLiteral("API_SYNC");
+            });
+    };
+    if (apiSyncCount() != 1) return 208;
+    if (!QMetaObject::invokeMethod(
+            &controller, "applyParkingSnapshot", Qt::DirectConnection,
+            Q_ARG(QJsonDocument, oneSlotSnapshot))) return 209;
+    if (apiSyncCount() != 1) return 210;
 
     const QByteArray systemErrorPayload = R"JSON({
         "event_id": "system-uart-disconnected",

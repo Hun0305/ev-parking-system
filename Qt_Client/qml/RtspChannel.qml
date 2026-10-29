@@ -10,6 +10,8 @@ Item {
     property string sourceLabel: typeof rtspSourceLabel === "undefined" ? "" : rtspSourceLabel
     property bool expanded: typeof channelExpanded === "undefined" ? false : channelExpanded
     property bool streamEnabled: typeof channelStreamEnabled === "undefined" ? false : channelStreamEnabled
+    property real fontScale: typeof uiFontScale === "undefined" ? 1.0 : uiFontScale
+    function scaledFont(pixelSize) { return Math.round(pixelSize * fontScale) }
     property bool fireAlarmActive: false
     readonly property string activeRtspUrl: lowRtspUrl
     readonly property bool diagnosticConfigured: activeRtspUrl !== ""
@@ -56,7 +58,7 @@ Item {
                 Text {
                     text: root.channel
                     color: "#eef2f5"
-                    font.pixelSize: root.expanded ? 16 : 14
+                    font.pixelSize: root.scaledFont(root.expanded ? 16 : 14)
                     font.bold: true
                     elide: Text.ElideRight
                     width: parent.width
@@ -67,7 +69,7 @@ Item {
                         + (root.reconnecting ? "" : " | " + videoItem.status)
                         + " | " + videoSpec
                     color: root.errorVisible ? "#ff8a80" : "#aeb9c2"
-                    font.pixelSize: 11
+                    font.pixelSize: root.scaledFont(11)
                     elide: Text.ElideRight
                     width: parent.width
                 }
@@ -75,7 +77,7 @@ Item {
                 Text {
                     text: "Frame " + videoItem.frameClockText
                     color: "#cfd8dc"
-                    font.pixelSize: 11
+                    font.pixelSize: root.scaledFont(11)
                     elide: Text.ElideRight
                     width: parent.width
                 }
@@ -89,7 +91,7 @@ Item {
                 text: "↻"
                 visible: root.reconnecting
                 color: "#ffca28"
-                font.pixelSize: 22
+                font.pixelSize: root.scaledFont(22)
                 font.bold: true
 
                 RotationAnimation on rotation {
@@ -114,7 +116,7 @@ Item {
             visible: videoItem.videoSize.width <= 0 || videoItem.videoSize.height <= 0
             text: !root.streamEnabled ? "Waiting" : root.activeRtspUrl === "" ? "RTSP URL NOT SET" : videoItem.status
             color: "#8d9aa5"
-            font.pixelSize: 13
+            font.pixelSize: root.scaledFont(13)
         }
 
         Rectangle {
@@ -142,7 +144,7 @@ Item {
             anchors.margins: 10
             text: root.expanded ? "Click to return" : "Click for full-screen"
             color: "#aeb9c2"
-            font.pixelSize: 11
+            font.pixelSize: root.scaledFont(11)
         }
 
         Text {
@@ -153,7 +155,7 @@ Item {
             text: root.errorVisible ? videoItem.errorString : ""
             visible: root.errorVisible
             color: "#ff8a80"
-            font.pixelSize: 11
+            font.pixelSize: root.scaledFont(11)
             elide: Text.ElideRight
         }
 

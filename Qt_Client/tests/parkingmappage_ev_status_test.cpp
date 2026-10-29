@@ -6,6 +6,7 @@
 #include <QMetaObject>
 #include <QPushButton>
 #include <QComboBox>
+#include <QGroupBox>
 #include <QTemporaryDir>
 
 namespace {
@@ -40,7 +41,6 @@ int main(int argc, char **argv)
     QLabel *occupiedSince = statusLabel(page, "runtimeOccupiedSinceLabel");
     QLabel *occupiedTime = statusLabel(page, "runtimeOccupiedTimeLabel");
     QLabel *alarm = statusLabel(page, "runtimeAlarmLabel");
-    QLabel *alarmState = statusLabel(page, "runtimeAlarmStateLabel");
     QLabel *selectedState = statusLabel(page, "selectedSlotStateLabel");
     QLabel *summaryTotal = statusLabel(page, "parkingSummaryTotal");
     QLabel *summaryVacant = statusLabel(page, "parkingSummaryVacant");
@@ -54,13 +54,17 @@ int main(int argc, char **argv)
     QLineEdit *search = page.findChild<QLineEdit *>(QStringLiteral("parkingZoneSearchEdit"));
     QComboBox *stateFilter = page.findChild<QComboBox *>(QStringLiteral("parkingStateFilterCombo"));
     QPushButton *undoButton = page.findChild<QPushButton *>(QStringLiteral("undoLayoutButton"));
+    QGroupBox *runtimeGroup = page.findChild<QGroupBox *>(
+        QStringLiteral("runtimeStatusGroup"));
     if (!dataStatus || !vehicle || !vehicleImage || !occupiedSince
         || !occupiedTime || !alarm
-        || !alarmState || !selectedState || !summaryTotal || !summaryOccupied
+        || !selectedState || !summaryTotal || !summaryOccupied
         || !summaryVacant || !summaryAlert || !overviewTotal || !overviewVacant
         || !overviewOccupied || !overviewAlert || !filterResult || !search
-        || !stateFilter || !undoButton) return 3;
-    if (statusLabel(page, "runtimePlateLabel")
+        || !stateFilter || !undoButton || !runtimeGroup) return 3;
+    if (!runtimeGroup->title().isEmpty()) return 37;
+    if (statusLabel(page, "runtimeAlarmStateLabel")
+        || statusLabel(page, "runtimePlateLabel")
         || statusLabel(page, "runtimeLastUpdatedLabel")) return 28;
 
     if (!selectRow(page, 0)) return 4;
@@ -93,7 +97,9 @@ int main(int argc, char **argv)
         || !occupiedTime->text().startsWith(QStringLiteral("00:19:"))) return 10;
     if (vehicleImage->text() != QStringLiteral("No vehicle image")) return 30;
     if (alarm->text() != QStringLiteral("NON-EV")) return 11;
-    if (alarmState->text() != QStringLiteral("ACTIVE")) return 12;
+    for (QLabel *label : page.findChildren<QLabel *>()) {
+        if (label->text().contains(QStringLiteral("HALL_EV_01"))) return 38;
+    }
     if (summaryTotal->text() != QStringLiteral("8")
         || summaryVacant->text() != QStringLiteral("0")
         || summaryOccupied->text() != QStringLiteral("1")
@@ -118,8 +124,7 @@ int main(int argc, char **argv)
     acknowledged.visual.alarmAcknowledged = true;
     state.evSlots[acknowledged.slotId] = acknowledged;
     page.render(state);
-    if (alarm->text() != QStringLiteral("NON-EV")
-        || alarmState->text() != QStringLiteral("ACK")) return 15;
+    if (alarm->text() != QStringLiteral("NON-EV")) return 15;
 
     EvSlotInfo vacant = occupied;
     vacant.state = SlotState::Vacant;
@@ -131,8 +136,7 @@ int main(int argc, char **argv)
     if (vehicle->text() != QStringLiteral("VACANT")) return 16;
     if (occupiedSince->text() != QStringLiteral("-")
         || occupiedTime->text() != QStringLiteral("-")) return 17;
-    if (alarm->text() != QStringLiteral("NORMAL")
-        || alarmState->text() != QStringLiteral("NONE")) return 18;
+    if (alarm->text() != QStringLiteral("NORMAL")) return 18;
 
     ParkingViewState unmapped;
     EvSlotInfo serverOnly = occupied;

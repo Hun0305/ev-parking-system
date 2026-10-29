@@ -3,12 +3,17 @@
 
 #include <QApplication>
 #include <QDialog>
+#include <QEvent>
 #include <QFrame>
 #include <QLabel>
 #include <QPushButton>
+#include <QQuickItem>
+#include <QQuickWidget>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QtQml/qqml.h>
+
+#include <cmath>
 
 int main(int argc, char **argv)
 {
@@ -17,6 +22,20 @@ int main(int argc, char **argv)
     qmlRegisterType<RtspVideoItem>("Rtsp", 1, 0, "RtspVideoItem");
 
     DashboardPage page(QStringList(4), QStringList(4));
+    const QList<QQuickWidget *> videoViews = page.findChildren<QQuickWidget *>();
+    if (videoViews.size() != 4 || !videoViews.first()->rootObject()
+        || std::abs(videoViews.first()->rootObject()
+                        ->property("fontScale").toDouble() - 1.0) > 0.01) {
+        return 4;
+    }
+    app.setProperty("uiFontScalePercent", 200);
+    QEvent fontChange(QEvent::FontChange);
+    QApplication::sendEvent(&page, &fontChange);
+    QApplication::processEvents();
+    if (std::abs(videoViews.first()->rootObject()
+                     ->property("fontScale").toDouble() - 2.0) > 0.01) {
+        return 5;
+    }
     QFrame *channel1 = page.findChild<QFrame *>(
         QStringLiteral("dashboardVideoChannelCH1"));
     QFrame *channel3 = page.findChild<QFrame *>(
@@ -52,7 +71,7 @@ int main(int argc, char **argv)
         || videoGrid->findChildren<QFrame *>().size() < 4
         || summaryCards->findChildren<QFrame *>().size() < 4
         || !troubleshooting->text().contains(
-            QStringLiteral("Debug > Overview"))) {
+            QStringLiteral("System > Diagnostics"))) {
         return 2;
     }
 

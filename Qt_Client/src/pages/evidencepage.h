@@ -71,7 +71,7 @@ protected:
     void hideEvent(QHideEvent *event) override;
 
 private:
-    void requestEvidenceRefresh(bool showInitialProgress);
+    void requestEvidenceRefresh();
     bool mergeEvidenceCache(const ParkingViewState &state);
     void rebuildTimelineFilters(const ParkingViewState &state);
     void renderCaptureTable();
@@ -148,8 +148,6 @@ private:
     QComboBox *m_slotFilter = nullptr;
     QLineEdit *m_plateFilter = nullptr;
     QLineEdit *m_reasonFilter = nullptr;
-    QLabel *m_summaryLabel = nullptr;
-    QLabel *m_statusLabel = nullptr;
     QLabel *m_slotMetricLabel = nullptr;
     QLabel *m_plateMetricLabel = nullptr;
     QLabel *m_sessionMetricLabel = nullptr;

@@ -1,18 +1,30 @@
 #include "pages/debugpage.h"
+#include "services/uifontscale.h"
 
 #include <QApplication>
 #include <QComboBox>
 #include <QDialog>
+#include <QDir>
 #include <QLabel>
+#include <QLayout>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QPixmap>
 #include <QScrollArea>
 #include <QTableWidget>
 #include <QTabWidget>
+#include <QTemporaryDir>
 
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
+    QTemporaryDir uiConfigDirectory(
+        QDir::current().filePath(QStringLiteral("debug-ui-test-XXXXXX")));
+    if (!uiConfigDirectory.isValid()) return 14;
+    UiFontScale::initialize(
+        app, uiConfigDirectory.filePath(QStringLiteral("client_config.local.ini")));
+    QString fontScaleError;
+    if (!UiFontScale::setPercent(200, &fontScaleError)) return 15;
     DebugPage page;
 
     QLabel *environmentBanner = page.findChild<QLabel *>(
@@ -21,12 +33,25 @@ int main(int argc, char **argv)
         QStringLiteral("debugTabWidget"));
     QScrollArea *overviewScroll = page.findChild<QScrollArea *>(
         QStringLiteral("debugOverviewScrollArea"));
+    QScrollArea *logsScroll = page.findChild<QScrollArea *>(
+        QStringLiteral("debugLogsScrollArea"));
     QScrollArea *toolsScroll = page.findChild<QScrollArea *>(
         QStringLiteral("debugTestToolsScrollArea"));
-    if (!environmentBanner || !tabs || !overviewScroll || !toolsScroll
+    if (!environmentBanner || !tabs || !overviewScroll || !logsScroll || !toolsScroll
         || tabs->count() != 3
         || !environmentBanner->text().contains(QStringLiteral("DEVELOPMENT"))
-        || !overviewScroll->widgetResizable() || !toolsScroll->widgetResizable()) {
+        || !overviewScroll->widgetResizable() || !toolsScroll->widgetResizable()
+        || !overviewScroll->widget() || !overviewScroll->widget()->layout()
+        || overviewScroll->widget()->layout()->contentsMargins().left() != 16
+        || overviewScroll->widget()->maximumWidth() != 1080
+        || !logsScroll->widgetResizable() || !logsScroll->widget()
+        || !logsScroll->widget()->layout()
+        || logsScroll->widget()->layout()->contentsMargins().left() != 16
+        || logsScroll->widget()->maximumWidth() != 1080
+        || !toolsScroll->widget() || !toolsScroll->widget()->layout()
+        || toolsScroll->widget()->layout()->contentsMargins().left() != 16
+        || toolsScroll->widget()->maximumWidth() != 900
+        || !page.styleSheet().contains(QStringLiteral("uiActionRole"))) {
         return 3;
     }
 
@@ -55,12 +80,20 @@ int main(int argc, char **argv)
         || !injectButton || !messageEdit) return 4;
     if (reconnectButton->property("impactScope").toString()
             != QStringLiteral("SERVER_API")
+        || reconnectButton->property("uiActionRole").toString()
+            != QStringLiteral("primary")
         || ackButton->property("impactScope").toString()
             != QStringLiteral("LOCAL_QT_STATE")
+        || ackButton->property("uiActionRole").toString()
+            != QStringLiteral("secondary")
         || nonEvButton->property("impactScope").toString()
             != QStringLiteral("LOCAL_TEST_EVENT")
+        || nonEvButton->property("uiActionRole").toString()
+            != QStringLiteral("warning")
         || injectButton->property("impactScope").toString()
-            != QStringLiteral("LOCAL_TEST_EVENT")) return 5;
+            != QStringLiteral("LOCAL_TEST_EVENT")
+        || injectButton->property("uiActionRole").toString()
+            != QStringLiteral("primary")) return 5;
 
     int reconnectCount = 0;
     int ackCount = 0;
@@ -146,6 +179,24 @@ int main(int argc, char **argv)
         return 11;
     }
 
+    const QString captureDir = qEnvironmentVariable("SYSTEM_UI_CAPTURE_DIR");
+    if (!captureDir.isEmpty()) {
+        QDir().mkpath(captureDir);
+        page.resize(900, 720);
+        const QStringList fileNames = {
+            QStringLiteral("system-diagnostics-200.png"),
+            QStringLiteral("system-live-logs-200.png"),
+            QStringLiteral("system-test-tools-200.png"),
+        };
+        for (int index = 0; index < tabs->count(); ++index) {
+            tabs->setCurrentIndex(index);
+            QApplication::processEvents();
+            if (!page.grab().save(QDir(captureDir).filePath(fileNames.at(index)))) {
+                return 13;
+            }
+        }
+    }
+
     QPushButton *helpButton = page.findChild<QPushButton *>(
         QStringLiteral("debugHelpButton"));
     if (!helpButton || helpButton->icon().isNull()) return 1;
@@ -168,5 +219,21 @@ int main(int argc, char **argv)
 
     dialog->close();
     QApplication::processEvents();
+
+    QTabWidget systemTabs;
+    systemTabs.addTab(new QWidget(&systemTabs), QStringLiteral("Configuration"));
+    DebugPage embeddedPage(&systemTabs, &systemTabs);
+    QLabel *embeddedApiImpact = systemTabs.findChild<QLabel *>(
+        QStringLiteral("debugApiImpactLabel"));
+    if (systemTabs.count() != 4
+        || systemTabs.tabText(1) != QStringLiteral("Diagnostics")
+        || systemTabs.tabText(2) != QStringLiteral("Live Logs")
+        || systemTabs.tabText(3) != QStringLiteral("Test Tools")
+        || systemTabs.findChild<QPushButton *>(
+               QStringLiteral("debugReconnectApiButton"))
+        || !embeddedApiImpact
+        || !embeddedApiImpact->text().contains(QStringLiteral("Configuration"))) {
+        return 12;
+    }
     return 0;
 }
