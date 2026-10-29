@@ -23,6 +23,10 @@ struct IvaAreaConfig {
     double roi_height;
     // CV Snapshot OpenAPI의 0-based channel. RTSP channel_id와 별도다.
     int snapshot_api_channel{0};
+    // true일 때만 이 좌표를 SQLite가 비어 있는 최초 부트스트랩 값으로 쓴다.
+    // 테스트/명시적 aggregate 초기화는 기존 호환을 위해 true가 기본이며,
+    // AppConfig 환경 로더는 ROI 환경변수가 전혀 없으면 false로 설정한다.
+    bool roi_configured{true};
 };
 
 struct AppConfig {
@@ -47,6 +51,13 @@ struct AppConfig {
     // 0이면 기존처럼 첫 OCCUPIED를 즉시 확정한다.
     int parking_occupancy_confirm_ms;
 
+    // 주차 점유 상태를 확정하는 입력 정책.
+    // HALL, CAMERA_IVA 또는 두 입력 중 하나로 입차를 확정하는 HYBRID_OR를
+    // 사용한다. HYBRID_OR에서도 슬롯당 활성 세션은 하나만 유지한다.
+    std::string parking_occupancy_source;
+    // CAMERA_IVA 모드에서 EXIT를 즉시 확정하지 않고 후속 INTRUSION을 기다리는 시간.
+    int camera_iva_exit_confirm_ms;
+
     // 확정된 입차 T0를 기준으로 30초/60초 MQTT 촬영 요청을 예약한다.
     bool capture_sched_enabled;
     std::string capture_topic_prefix;
@@ -58,7 +69,16 @@ struct AppConfig {
     std::string capture_offsets_sec;
     int capture_ocr_max_attempts;
 
-    // CV5 cv_snapshot_api에서 original/enhanced JPEG를 생성·다운로드한다.
+    // 야간 번호판 조명 LED (Pi -> STM32). 예약된 촬영 직전에만 켜고 직후에 끈다.
+    // 야간 구간은 일출/일몰 계산 없이 관리자가 계절마다 조정하는 시각 구간이다.
+    bool plate_led_enabled;
+    int plate_led_night_start_hour;
+    int plate_led_night_end_hour;
+    // LED 점등부터 실제 촬영까지 두는 정착 지연이다.
+    int plate_led_settle_ms;
+
+    // CV5 cv_snapshot_api에서 세션 증거와 30/60초 original/enhanced JPEG를
+    // 생성·다운로드한다. fallback=false이면 Pi RTSP 수신을 시작하지 않는다.
     bool camera_snapshot_api_enabled;
     bool camera_snapshot_api_rtsp_fallback;
     std::string camera_open_api_base;
@@ -71,6 +91,10 @@ struct AppConfig {
     int camera_snapshot_jpeg_timeout_ms;
     int camera_snapshot_max_retries;
     int camera_snapshot_retry_delay_ms;
+
+    // Hanwha RTSP metadata의 Vehicle/Plate BestShot 다운로드 경로.
+    // IVA + Snapshot API 운영에서는 중복 세션/촬영을 막기 위해 기본 비활성화한다.
+    bool bestshot_enabled{false};
 
     // 화재 알림 (STM32 UART -> Pi -> Qt). 토픽/프레임 규격은 아직 미확정이므로
     // 임시로 정한 값이며 여기 한 곳에서만 바꾼다.
@@ -109,11 +133,19 @@ struct AppConfig {
     int iva_duplicate_suppression_ms;
     int gemini_connect_timeout_sec;
     int gemini_request_timeout_sec;
+    bool telegram_enabled;
+    std::string telegram_bot_token;
+    std::string telegram_channel;
+    int telegram_connect_timeout_ms;
+    int telegram_request_timeout_ms;
+    int telegram_retry_count;
+    int telegram_retry_delay_ms;
+    int telegram_queue_capacity;
 
     bool parking_timer_enabled;
-    int parking_timeout_seconds;
-    // 모든 활성 세션의 장기 점유 증거 촬영 지연. 기본 1시간이다.
-    int parking_overstay_evidence_delay_seconds;
+    // 위반 판정과 OVERSTAY_EVIDENCE가 함께 사용하는 단일 부트스트랩 값.
+    // 서버 시작 후에는 SQLite SYSTEM_SETTINGS 값이 우선한다.
+    int parking_overstay_threshold_seconds;
 
     bool http_api_enabled;
     std::string http_listen_address;

@@ -1,5 +1,7 @@
 #include "eventspage.h"
 
+#include "widgets/pagehelp.h"
+
 #include <QAbstractItemView>
 #include <QComboBox>
 #include <QDateTime>
@@ -58,6 +60,19 @@ EventsPage::EventsPage(QWidget *parent)
     m_resetFilterButton->setObjectName(QStringLiteral("eventFilterResetButton"));
     m_resetFilterButton->setEnabled(false);
     filterLayout->addWidget(m_resetFilterButton);
+    filterLayout->addWidget(createPageHelpButton(
+        this, this,
+        {QStringLiteral("events"), QStringLiteral("Events"),
+         QStringLiteral("Events 사용 안내"),
+         QStringLiteral("수신한 정규화 이벤트를 검색·필터링하고 전체 이력을 내보냅니다."),
+         QStringLiteral(
+             "<b>1. 이벤트 검색</b><br>검색창은 시간, Zone, Event, Message, Status 전체 열을 대상으로 합니다.<br><br>"
+             "<b>2. 조건 필터링</b><br>Zone, 이벤트 종류, OPEN·ACKED·CLEARED 상태 필터는 검색어와 함께 적용됩니다.<br><br>"
+             "<b>3. 증거 화면 이동</b><br>주차 슬롯 이벤트를 더블클릭하면 해당 슬롯의 <i>Evidence</i> 화면으로 이동합니다.<br><br>"
+             "<b>4. CSV 저장</b><br><i>Export CSV</i>를 누르면 현재 필터와 관계없이 전체 이벤트 로그를 저장합니다."),
+         QStringLiteral(
+             "※ 화재 채널이나 SYSTEM처럼 주차 슬롯으로 연결되지 않는 이벤트는 Evidence로 이동하지 않습니다.\n"
+             "   Reset filters는 검색어와 모든 필터를 초기화합니다.")}));
     layout->addLayout(filterLayout);
 
     m_eventTable = new QTableWidget(0, 5, this);
@@ -70,7 +85,7 @@ EventsPage::EventsPage(QWidget *parent)
     layout->addWidget(m_eventTable, 1);
     auto *buttonLayout = new QHBoxLayout;
     auto *hint = new QLabel(
-        QStringLiteral("Double-click a parking event to view its evidence."), this);
+        QStringLiteral("Double-click an event to open evidence by event ID."), this);
     hint->setStyleSheet(QStringLiteral("color:#607d8b;"));
     buttonLayout->addWidget(hint);
     m_filterResultLabel = new QLabel(QStringLiteral("Showing 0 of 0 events"), this);
@@ -97,9 +112,12 @@ EventsPage::EventsPage(QWidget *parent)
     connect(exportButton, &QPushButton::clicked, this, &EventsPage::exportCsv);
     connect(m_eventTable, &QTableWidget::cellDoubleClicked, this,
             [this](int row, int) {
-                const QTableWidgetItem *sourceItem = m_eventTable->item(row, 1);
-                if (sourceItem && !sourceItem->text().trimmed().isEmpty()) {
-                    emit evidenceRequested(sourceItem->text());
+                const QTableWidgetItem *eventItem = m_eventTable->item(row, 0);
+                const QString eventId = eventItem
+                    ? eventItem->data(Qt::UserRole).toString().trimmed()
+                    : QString();
+                if (!eventId.isEmpty()) {
+                    emit eventEvidenceRequested(eventId);
                 }
             });
 }
@@ -112,7 +130,10 @@ void EventsPage::appendEvent(const MonitoringEvent &event)
         monitoringEventTimeText(event), event.sourceId, event.eventType,
         event.message, monitoringEventStatusText(event)};
     for (int column = 0; column < values.size(); ++column) {
-        m_eventTable->setItem(row, column, new QTableWidgetItem(values.at(column)));
+        auto *item = new QTableWidgetItem(values.at(column));
+        item->setData(Qt::UserRole, event.id);
+        item->setData(Qt::UserRole + 1, event.evidenceSlotId);
+        m_eventTable->setItem(row, column, item);
     }
     addFilterOption(m_zoneFilter, event.sourceId);
     addFilterOption(m_eventTypeFilter, event.eventType);

@@ -29,6 +29,11 @@
 #include "arm_math.h"
 #include "sensor_queue.h"
 #include "sensor_protocol.h"
+#include "alert_command.h"
+#include "lora_e22.h"
+#include "lora_frame.h"
+#include "usart.h"    /* huart2 -- vApplicationStackOverflowHook */
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -66,12 +71,80 @@ osSemaphoreId_t adcBufReadySemHandle;
 const osSemaphoreAttr_t adcBufReadySem_attributes = {
   .name = "adcBufReadySem"
 };
+
+/* Released by HAL_GPIO_EXTI_Callback (main.c) on either edge of any of the
+ * 4 hall D0 pins, so TaskHallSensor can block instead of polling every
+ * 50ms -- same shape as adcBufReadySemHandle above. */
+osSemaphoreId_t hallEdgeSemHandle;
+const osSemaphoreAttr_t hallEdgeSem_attributes = {
+  .name = "hallEdgeSem"
+};
+
+/* Hall debounce state, kept at file scope (was local to
+ * StartTaskHallSensor) so the confirmed value and the last-reported value
+ * can be compared across wakes. */
+static uint8_t hall_debounced_state[SENSOR_HALL_COUNT] = {0};
+static uint8_t hall_candidate_state[SENSOR_HALL_COUNT] = {0};
+static uint32_t hall_stable_count[SENSOR_HALL_COUNT] = {0};
+/* Last state actually put on the wire per slot -- lets TaskHallSensor emit
+ * only on a confirmed change instead of a fixed cadence, same as
+ * TaskFlameSensor's last_verdict. */
+static uint8_t hall_last_reported_state[SENSOR_HALL_COUNT] = {0};
+
+/* 채널별 쿨다운 상태 (SENSOR_HALL_COOLDOWN_MS).
+ *
+ * 첫 변화는 즉시 나가고, 그 뒤 쿨다운 동안 생긴 변화는 버리지 않고 pending
+ * 으로 표시만 해둔다. 쿨다운이 끝나면 그때의 *최신* 상태를 한 번 보낸다.
+ * 그래서 채터링이 나도 프레임 수가 늘지 않고, 수신측 상태는 늦어도 쿨다운
+ * 시간 안에 반드시 맞아진다.
+ *
+ * 이게 없으면 채터링 시 duty 리미터가 프레임을 버리는데, 버려진 게 상태
+ * 변화면 수신측은 다음 하트비트(30초)까지 틀린 상태를 들고 있게 된다. */
+static uint32_t hall_last_sent_tick[SENSOR_HALL_COUNT] = {0};
+static uint8_t  hall_sent_once[SENSOR_HALL_COUNT] = {0};
+static uint8_t  hall_pending[SENSOR_HALL_COUNT] = {0};
+
+/* Fires every 30s regardless of GPIO activity: resends whatever
+ * hall_debounced_state currently holds, purely as a liveness signal. Edge
+ * changes are still reported instantly by TaskHallSensor above -- this
+ * timer exists only so the Pi side can tell "nothing changed in a while"
+ * apart from "the STM32/UART link died", which pure on-change reporting
+ * can't distinguish. The Pi's duplicate/stale-sequence guard already
+ * treats repeats as safe, so re-sending unchanged state here is fine. */
+osTimerId_t hallHeartbeatTimerHandle;
+const osTimerAttr_t hallHeartbeatTimer_attributes = {
+  .name = "hallHeartbeatTimer"
+};
+
+/* Last verdict actually put on the wire by TaskFlameSensor, and whether the
+ * boot-time baseline/first verdict has been recorded yet. Moved out of
+ * StartTaskFlameSensor's locals (was last_verdict/verdict_seeded) so
+ * FlameHeartbeatTimerCallback below can read the current value too. */
+static uint8_t flame_last_verdict = 0;
+static uint8_t flame_verdict_seeded = 0;
+/* 마지막으로 계산한 1~20Hz 대역 에너지. v1.1 부터 전선에 실려 나가므로
+ * 하트비트/텔레메트리에서도 이 값을 쓴다. */
+static float   flame_last_energy = 0.0f;
+
+/* Same idea as hallHeartbeatTimerHandle: every 30s, resend the last flame
+ * verdict regardless of change, purely as a liveness signal. Actual
+ * ALERT/CLEAR transitions are still reported instantly by
+ * TaskFlameSensor. Guarded on flame_verdict_seeded so it can't fire before
+ * the boot baseline is established (see FLAME_SETTLE_WINDOWS below). */
+osTimerId_t flameHeartbeatTimerHandle;
+const osTimerAttr_t flameHeartbeatTimer_attributes = {
+  .name = "flameHeartbeatTimer"
+};
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 128 * 4,
+  /* LoRa 하행 펌프 + 진단 printf 가 여기서 돈다. 128*4(512B)로는 printf
+   * 하나에 스택이 넘친다 -- newlib 의 포맷 파싱만으로 200~300B 를 쓴다.
+   * 넘치면 vApplicationStackOverflowHook -> Error_Handler() 무한루프라
+   * 로그가 뚝 끊기고 원인이 안 보인다. 실제로 그 증상을 겪었다. */
+  .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for TaskFlameSensor */
@@ -95,16 +168,32 @@ const osThreadAttr_t TaskPacketTX_attributes = {
   .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+/* Definitions for TaskCommandRX (EVDA-194: receives the Pi's plate-LED
+ * AlertCommand lines, see alert_command.c). Stack is small on purpose --
+ * AlertCommand_Task() only does short string parsing and a couple of HAL/
+ * RTOS calls per wake, nothing like TaskFlameSensor's FFT buffers. */
+osThreadId_t TaskCommandRXHandle;
+const osThreadAttr_t TaskCommandRX_attributes = {
+  .name = "TaskCommandRX",
+  /* 원래는 짧은 문자열 파싱 + HAL/RTOS 호출 몇 개뿐이라 128*4 로 충분했는데,
+   * 명령 수락/거부 진단 로그(printf)가 붙으면서 부족해졌다. defaultTask 와
+   * 같은 이유다 -- 위 주석 참고. */
+  .stack_size = 384 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-
+static void HallHeartbeatTimerCallback(void *argument);
+static void FlameHeartbeatTimerCallback(void *argument);
+static void HallEmitIfAllowed(uint8_t ch);
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
 void StartTaskFlameSensor(void *argument);
 void StartTaskHallSensor(void *argument);
 void StartTaskPacketTX(void *argument);
+void StartTaskCommandRX(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -123,10 +212,27 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   adcBufReadySemHandle = osSemaphoreNew(1, 0, &adcBufReadySem_attributes);
+  hallEdgeSemHandle = osSemaphoreNew(1, 0, &hallEdgeSem_attributes);
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* USER CODE BEGIN RTOS_TIMERS */
+  hallHeartbeatTimerHandle = osTimerNew(HallHeartbeatTimerCallback, osTimerPeriodic, NULL, &hallHeartbeatTimer_attributes);
+  osTimerStart(hallHeartbeatTimerHandle, 30000);
 
+#if SENSOR_HAS_FLAME
+  flameHeartbeatTimerHandle = osTimerNew(FlameHeartbeatTimerCallback, osTimerPeriodic, NULL, &flameHeartbeatTimer_attributes);
+  /* 5초 주기로 돌지만 CLEARED 상태에서는 6번에 한 번(=30초)만 실제로 보낸다.
+   * DETECTED 인 동안에만 5초 간격 텔레메트리가 된다 -- 콜백 주석 참고. */
+  osTimerStart(flameHeartbeatTimerHandle, SENSOR_FLAME_TELEMETRY_MS);
+#endif
+
+  /* Creates the line-ready semaphore and the 4 per-LED failsafe one-shot
+   * timers. Grouped here (not a separate RTOS_SEMAPHORES entry) because
+   * AlertCommand owns both and creates them together; see alert_command.c.
+   * Must run before AlertCommand_StartReceive() (main.c,
+   * RTOS_PERIPH_START) so a line can never arrive before these objects
+   * exist. */
+  AlertCommand_Init();
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
@@ -139,9 +245,14 @@ void MX_FREERTOS_Init(void) {
    * function and restore these lines if they're missing. */
   /* Create the thread(s) */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+#if SENSOR_HAS_FLAME
+  /* 화재센서가 없는 보드(STM2)에서는 태스크를 아예 만들지 않는다. FFT 버퍼
+   * 때문에 스택이 2KB라, 안 쓰면서 잡아두면 힙만 축낸다. */
   TaskFlameSensorHandle = osThreadNew(StartTaskFlameSensor, NULL, &TaskFlameSensor_attributes);
+#endif
   TaskHallSensorHandle = osThreadNew(StartTaskHallSensor, NULL, &TaskHallSensor_attributes);
   TaskPacketTXHandle = osThreadNew(StartTaskPacketTX, NULL, &TaskPacketTX_attributes);
+  TaskCommandRXHandle = osThreadNew(StartTaskCommandRX, NULL, &TaskCommandRX_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
 
@@ -162,11 +273,58 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
+#if SENSOR_TX_LORA
+  /* LoRa 하행 펌프.
+   *
+   * USART1 인터럽트가 바이트를 링버퍼에 넣고(lora_e22.c), 여기서 꺼내
+   * 프레임으로 조립한다. CRC 까지 통과한 payload 만 명령 파서로 넘긴다.
+   *
+   * 예전에는 이 자리에서 LoRa_Recv() 블로킹 폴링을 돌렸는데, 그건 부르는
+   * 동안에만 듣는 구조라 호출 사이에 온 바이트가 사라졌고(Pi PING 5개 중
+   * 2개 유실) yield 도 하지 않아 CPU 를 계속 태웠다. 이제는 ISR 이 항상
+   * 듣고 있으므로 여기서는 10ms 마다 훑기만 하면 된다 -- 명령 지연으로는
+   * 무시할 수준이고, 그 사이 도착분은 링버퍼가 받아둔다.
+   *
+   * 명령 파서는 USART2 경로와 공유한다(alert_command.c). 즉 Pi 는 LoRa 로,
+   * 사람은 PuTTY 로 같은 명령을 넣을 수 있다. */
+  static char lora_line[LORA_FRAME_MAX_PAYLOAD + 1];
+  for (;;)
+  {
+    uint8_t  type = 0;
+    uint32_t seq = 0;
+    uint16_t n = LoRaFrame_Poll(lora_line, sizeof(lora_line), &type, &seq);
+
+    if (n == 0)
+    {
+      /* 수신이 꺼져 있으면 되살린다. 정상일 때는 아무 일도 안 한다. */
+      if (LoRa_EnsureReceiving())
+      {
+        printf("# [%8lu] LORA RX 재무장 (누적 %lu회, 링버퍼 유실 %lu B)\r\n",
+               (unsigned long)HAL_GetTick(),
+               (unsigned long)LoRa_GetRxRearmCount(),
+               (unsigned long)LoRa_GetRxOverrunCount());
+      }
+      osDelay(10);
+      continue;
+    }
+
+#if LORA_DEBUG_RX
+    printf("# [%8lu] LORA RX type=0x%02X seq=%lu: %s\r\n",
+           (unsigned long)HAL_GetTick(), (unsigned)type,
+           (unsigned long)seq, lora_line);
+#endif
+
+    /* 알 수 없는 줄은 파서가 조용히 무시하므로 타입으로 미리 거르지 않는다.
+     * 그래야 Pi 쪽에서 형식을 바꿔도 로그로는 보인다. */
+    AlertCommand_SubmitLine(lora_line, n);
+  }
+#else
   /* Infinite loop */
   for(;;)
   {
     osDelay(1000);
   }
+#endif
   /* USER CODE END StartDefaultTask */
 }
 
@@ -236,9 +394,6 @@ void StartTaskFlameSensor(void *argument)
   float32_t baseline_accum = 0.0f;
   uint8_t baseline_ready = 0;
   float32_t baseline_avg = 0.0f;
-
-  uint8_t last_verdict = 0;    /* last verdict actually put on the wire */
-  uint8_t verdict_seeded = 0;  /* 1 once the boot-time verdict has been recorded */
 
   arm_rfft_fast_init_f32(&fft_inst, FFT_SIZE);
 
@@ -310,19 +465,24 @@ void StartTaskFlameSensor(void *argument)
     SensorProtocol_SendFlameEnergyDebug(raw_avg, baseline_avg, energy, delta,
                                         raw_verdict, vote_count, debounced_verdict);
 
-    /* Emit only on a confirmed state change, unlike the hall task's 1s
-     * heartbeat: the Pi expects fire as an edge event, not a repeating
-     * status line. The first window after boot seeds last_verdict without
-     * emitting, so a board coming up in a quiet room doesn't announce a
-     * redundant CLEARED. */
-    if (!verdict_seeded)
+    /* Emit only on a confirmed state change: the Pi expects fire as an edge
+     * event, not a repeating status line. FlameHeartbeatTimerCallback below
+     * covers the separate "is the link even alive" concern on its own 30s
+     * cadence. The first window after boot seeds flame_last_verdict
+     * without emitting, so a board coming up in a quiet room doesn't
+     * announce a redundant CLEARED. */
+    /* 하트비트/텔레메트리가 최신 세기를 실어 보낼 수 있도록 매 윈도우
+     * 갱신한다. 판정과 무관하게 값 자체는 계속 살아 있어야 한다. */
+    flame_last_energy = energy;
+
+    if (!flame_verdict_seeded)
     {
-      last_verdict = debounced_verdict;
-      verdict_seeded = 1;
+      flame_last_verdict = debounced_verdict;
+      flame_verdict_seeded = 1;
     }
-    else if (debounced_verdict != last_verdict)
+    else if (debounced_verdict != flame_last_verdict)
     {
-      last_verdict = debounced_verdict;
+      flame_last_verdict = debounced_verdict;
 
       SensorEvent_t evt = {
         .type = EVT_FLAME,
@@ -336,6 +496,61 @@ void StartTaskFlameSensor(void *argument)
   /* USER CODE END StartTaskFlameSensor */
 }
 
+/* USER CODE BEGIN Header_FlameHeartbeatTimerCallback */
+/**
+* @brief 30s liveness heartbeat, independent of the edge-triggered reports
+* in StartTaskFlameSensor above: resends flame_last_verdict so the Pi can
+* tell "quiet sensor" apart from "dead link". No-op until
+* flame_verdict_seeded is set (i.e. until the boot baseline is ready) so it
+* can't leak a bogus verdict before TaskFlameSensor has ever recorded one.
+* Runs in the Timer Service Task context (not ISR), so calling
+* osMessageQueuePut directly here is safe.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_FlameHeartbeatTimerCallback */
+static void FlameHeartbeatTimerCallback(void *argument)
+{
+  /* USER CODE BEGIN FlameHeartbeatTimerCallback */
+  (void)argument;
+
+  if (!flame_verdict_seeded)
+  {
+    return;
+  }
+
+  /* 타이머는 SENSOR_FLAME_TELEMETRY_MS(5초) 주기로 돌지만 매번 보내지는
+   * 않는다. 연속 스트리밍은 duty 예산을 감당할 수 없다 -- 1초 간격이면
+   * 분당 780ms 로 예산 960ms 의 81% 를 화재 하나가 먹는다.
+   *
+   *   CLEARED (평상시) : 30초마다 한 번. 순수 liveness 신호.
+   *   DETECTED (연소중) : 5초마다. 필요한 순간에만 촘촘해진다.
+   *
+   * 화재는 드문 사건이라 이 비대칭이 duty 에 주는 부담은 실질적으로 없고,
+   * Qt 는 정작 봐야 할 때 5초 간격 곡선을 얻는다. */
+  static uint32_t tick = 0;
+  const uint32_t TICKS_PER_HEARTBEAT =
+      30000u / SENSOR_FLAME_TELEMETRY_MS;   /* 30초 = 6틱 */
+
+  tick++;
+  if ((flame_last_verdict == 0) && (tick < TICKS_PER_HEARTBEAT))
+  {
+    return;
+  }
+  tick = 0;
+
+  SensorEvent_t evt = {
+    .type = EVT_FLAME,
+    .slot = 0,
+    .state = flame_last_verdict,
+    /* 하트비트/텔레메트리도 최신 energy 를 실어 보낸다. 0 으로 보내면
+     * Qt 그래프가 주기적으로 바닥을 찍는 것처럼 보인다. */
+    .energy = flame_last_energy
+  };
+  osMessageQueuePut(sensorEventQueueHandle, &evt, 0, 0);
+  /* USER CODE END FlameHeartbeatTimerCallback */
+}
+
 /* USER CODE BEGIN Header_StartTaskHallSensor */
 /**
 * @brief Function implementing the TaskHallSensor thread.
@@ -346,83 +561,198 @@ void StartTaskFlameSensor(void *argument)
 void StartTaskHallSensor(void *argument)
 {
   /* USER CODE BEGIN StartTaskHallSensor */
-  const uint32_t POLL_PERIOD_MS = 50;
-  const uint32_t DEBOUNCE_COUNT = 5; /* 5 * 50ms = 250ms stable required */
+  const uint32_t SAMPLE_INTERVAL_MS = 50;  /* same cadence as the old poll loop */
+  const uint32_t DEBOUNCE_COUNT = 5;       /* 5 * 50ms = 250ms stable required, unchanged */
+  const uint32_t CONFIRM_ITERATIONS = 6;   /* 300ms settle window per wake: enough for one full debounce plus margin */
 
   /* One GPIO per sensor. The CD4051 mux was dropped after 4-channel bring-up:
    * going through it pinned every channel to OCCUPIED even with no magnet
    * present, while reading D0 directly worked. Index here is slot_index 0~3,
-   * which the protocol layer maps to sensor 1~4. */
-  GPIO_TypeDef *const hall_port[4] = {
+   * which the protocol layer maps to sensor 1~4. HALL1/2/3/4 are on
+   * PA8/PB10/PB4/PB5 -- picked so no two share an EXTI line number, see
+   * gpio.c. */
+  /* 보드에 실제로 달린 개수만 쓴다(SENSOR_HALL_COUNT). 배열에는 핀 4개를
+   * 그대로 두되 앞에서부터 잘라 쓰는 방식이라, 홀을 2개로 줄여도 배선은
+   * HALL1/HALL2 자리를 그대로 쓰면 된다. */
+  GPIO_TypeDef *const hall_port[] = {
     HALL1_D0_GPIO_Port, HALL2_D0_GPIO_Port, HALL3_D0_GPIO_Port, HALL4_D0_GPIO_Port
   };
-  const uint16_t hall_pin[4] = {
+  const uint16_t hall_pin[] = {
     HALL1_D0_Pin, HALL2_D0_Pin, HALL3_D0_Pin, HALL4_D0_Pin
   };
+  _Static_assert(SENSOR_HALL_COUNT <= 4, "핀 정의는 4개까지만 있다");
 
-  /* Hall reports on a fixed 1s cadence rather than only on change: the Pi
-   * side agreed on 1~2s polling and treats repeats as idempotent
-   * (DuplicateOccupiedIgnored / DuplicateVacantIgnored), so a steady heartbeat
-   * also doubles as a liveness signal. Debouncing still happens here at 50ms
-   * -- only the confirmed state is ever reported. (Fire is the opposite: it
-   * stays edge-triggered, see StartTaskFlameSensor.) */
-  const uint32_t REPORT_EVERY_N_POLLS = 1000 / POLL_PERIOD_MS; /* 20 * 50ms = 1s */
-  uint32_t poll_tick = 0;
+  /* This used to be a 50ms poll loop that scanned all 4 channels forever
+   * and reported all 4 on a fixed 1s tick regardless of change. Now the 4
+   * D0 pins are EXTI (both edges, see gpio.c) and HAL_GPIO_EXTI_Callback
+   * (main.c) just releases hallEdgeSemHandle -- same "ISR signals, task
+   * does the work" shape as TaskFlameSensor's adcBufReadySemHandle.
+   * Reporting is also edge-triggered now, same as TaskFlameSensor: only a
+   * confirmed change goes out over UART, not a repeating status line. The
+   * debounce logic itself (N consecutive matching reads) is unchanged --
+   * only the outer drive (always-on tick vs. wake-on-edge) and the report
+   * condition (fixed cadence vs. on-change) changed. */
 
-  uint8_t debounced_state[4] = {0};   /* last confirmed state, sent to Pi */
-  uint8_t candidate_state[4] = {0};   /* raw reading being debounced */
-  uint32_t stable_count[4] = {0};     /* consecutive reads matching candidate_state */
+  /* One full scan before ever blocking, seeding both the debounced and the
+   * last-reported state without emitting -- same idea as TaskFlameSensor's
+   * verdict_seeded boot window, just instantaneous here since there's no
+   * ambient signal to average. Without this, a sensor already occupied at
+   * boot would never be reported until its next physical transition. */
+  for (uint8_t ch = 0; ch < SENSOR_HALL_COUNT; ch++)
+  {
+    uint8_t raw = (HAL_GPIO_ReadPin(hall_port[ch], hall_pin[ch]) == GPIO_PIN_RESET) ? 1 : 0;
+    hall_candidate_state[ch] = raw;
+    hall_stable_count[ch] = DEBOUNCE_COUNT;
+    hall_debounced_state[ch] = raw;
+    hall_last_reported_state[ch] = raw;
+  }
 
   for (;;)
   {
-    for (uint8_t ch = 0; ch < 4; ch++)
+    /* Blocks here until HAL_GPIO_EXTI_Callback signals an edge on any of
+     * the 4 hall pins.
+     *
+     * 다만 쿨다운에 걸려 대기 중인(pending) 채널이 있으면 무한정 기다리면
+     * 안 된다. 채터링이 멎어 더 이상 엣지가 안 오면 그 상태 변화가 다음
+     * 하트비트(30초)까지 묻히기 때문이다. 남은 쿨다운만큼만 기다렸다가
+     * 깨어나 밀어낸다. */
+    uint32_t wait = osWaitForever;
+    for (uint8_t ch = 0; ch < SENSOR_HALL_COUNT; ch++)
     {
-      /* D0 is open-collector: idle (no magnet) floats HIGH via the pull-up,
-       * and a magnet trips the comparator which sinks the line LOW. So LOW
-       * is OCCUPIED, not HIGH. */
-      uint8_t raw = (HAL_GPIO_ReadPin(hall_port[ch], hall_pin[ch]) == GPIO_PIN_RESET) ? 1 : 0;
+      if (!hall_pending[ch]) continue;
+      uint32_t elapsed = osKernelGetTickCount() - hall_last_sent_tick[ch];
+      uint32_t remain = (elapsed >= SENSOR_HALL_COOLDOWN_MS)
+                        ? 1u : (SENSOR_HALL_COOLDOWN_MS - elapsed);
+      if ((wait == osWaitForever) || (remain < wait)) wait = remain;
+    }
+    osSemaphoreAcquire(hallEdgeSemHandle, wait);
 
-      /* Debounce: only trust a new value once it's been read the same way
-       * DEBOUNCE_COUNT times in a row; any different reading resets the count. */
-      if (raw == candidate_state[ch])
+    /* 엣지로 깨웠든 쿨다운 만료로 깨웠든, 밀린 것부터 처리한다. */
+    for (uint8_t ch = 0; ch < SENSOR_HALL_COUNT; ch++)
+    {
+      if (hall_pending[ch]) HallEmitIfAllowed(ch);
+    }
+
+    for (uint32_t i = 0; i < CONFIRM_ITERATIONS; i++)
+    {
+      for (uint8_t ch = 0; ch < SENSOR_HALL_COUNT; ch++)
       {
-        if (stable_count[ch] < DEBOUNCE_COUNT)
+        /* D0 is open-collector: idle (no magnet) floats HIGH via the pull-up,
+         * and a magnet trips the comparator which sinks the line LOW. So LOW
+         * is OCCUPIED, not HIGH. */
+        uint8_t raw = (HAL_GPIO_ReadPin(hall_port[ch], hall_pin[ch]) == GPIO_PIN_RESET) ? 1 : 0;
+
+        /* Debounce: only trust a new value once it's been read the same way
+         * DEBOUNCE_COUNT times in a row; any different reading resets the count. */
+        if (raw == hall_candidate_state[ch])
         {
-          stable_count[ch]++;
+          if (hall_stable_count[ch] < DEBOUNCE_COUNT)
+          {
+            hall_stable_count[ch]++;
+          }
+        }
+        else
+        {
+          hall_candidate_state[ch] = raw;
+          hall_stable_count[ch] = 1;
+        }
+
+        if (hall_stable_count[ch] >= DEBOUNCE_COUNT)
+        {
+          hall_debounced_state[ch] = hall_candidate_state[ch];
+
+          /* Emit only on a confirmed change from what was last put on the
+           * wire -- repeated confirmations of the same value (e.g. more
+           * iterations in this window, or a later wake with no real
+           * change) must not re-send.
+           * 쿨다운 판단은 HallEmitIfAllowed() 안에 있다. */
+          HallEmitIfAllowed(ch);
         }
       }
-      else
-      {
-        candidate_state[ch] = raw;
-        stable_count[ch] = 1;
-      }
 
-      if (stable_count[ch] >= DEBOUNCE_COUNT)
-      {
-        debounced_state[ch] = candidate_state[ch];
-      }
+      osDelay(SAMPLE_INTERVAL_MS);
     }
-
-    /* Report all four slots together once per second. */
-    if (++poll_tick >= REPORT_EVERY_N_POLLS)
-    {
-      poll_tick = 0;
-
-      for (uint8_t ch = 0; ch < 4; ch++)
-      {
-        SensorEvent_t evt = {
-          .type = EVT_HALL,
-          .slot = ch,
-          .state = debounced_state[ch],
-          .energy = 0.0f
-        };
-        osMessageQueuePut(sensorEventQueueHandle, &evt, 0, 0);
-      }
-    }
-
-    osDelay(POLL_PERIOD_MS);
   }
   /* USER CODE END StartTaskHallSensor */
+}
+
+/* USER CODE BEGIN Header_HallHeartbeatTimerCallback */
+/**
+* @brief 30s liveness heartbeat, independent of the edge-triggered reports
+* in StartTaskHallSensor above: resends whatever hall_debounced_state
+* currently holds so the Pi can tell "quiet sensor" apart from "dead
+* link". Runs in the Timer Service Task context (not ISR), so calling
+* osMessageQueuePut directly here is safe -- same as every other non-ISR
+* call site in this file.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_HallHeartbeatTimerCallback */
+/* 채널 하나의 확정 상태를 내보낼 수 있으면 내보내고, 쿨다운 중이면
+ * pending 으로만 남긴다. 상태 자체는 hall_debounced_state 에 이미 최신값이
+ * 들어 있으므로, 나중에 보낼 때 자동으로 최신 상태가 나간다(합치기). */
+static void HallEmitIfAllowed(uint8_t ch)
+{
+  if (hall_debounced_state[ch] == hall_last_reported_state[ch])
+  {
+    hall_pending[ch] = 0;      /* 떨다가 원래 값으로 돌아왔다 -- 보낼 것 없음 */
+    return;
+  }
+
+  uint32_t now = osKernelGetTickCount();
+  if (hall_sent_once[ch] &&
+      ((now - hall_last_sent_tick[ch]) < SENSOR_HALL_COOLDOWN_MS))
+  {
+    hall_pending[ch] = 1;      /* 쿨다운 중. 끝나면 최신 상태로 나간다 */
+    return;
+  }
+
+  hall_last_reported_state[ch] = hall_debounced_state[ch];
+  hall_last_sent_tick[ch] = now;
+  hall_sent_once[ch] = 1;
+  hall_pending[ch] = 0;
+
+  SensorEvent_t evt = {
+    .type = EVT_HALL,
+    .slot = ch,
+    .state = hall_debounced_state[ch],
+    .energy = 0.0f
+  };
+  osMessageQueuePut(sensorEventQueueHandle, &evt, 0, 0);
+}
+
+static void HallHeartbeatTimerCallback(void *argument)
+{
+  /* USER CODE BEGIN HallHeartbeatTimerCallback */
+  (void)argument;
+
+  uint32_t now = osKernelGetTickCount();
+
+  for (uint8_t ch = 0; ch < SENSOR_HALL_COUNT; ch++)
+  {
+    /* 최근 30초 안에 이미 보낸 채널은 건너뛴다.
+     *
+     * 하트비트의 목적은 "이 노드가 살아 있다"를 알리는 것뿐인데, 방금
+     * 상태를 보낸 채널은 그게 이미 증명돼 있다. 무조건 4개를 보내면
+     * 채터링 중인 채널이 쿨다운 전송과 하트비트를 둘 다 내보내면서
+     * duty 최악 케이스가 925ms(예산의 96%)까지 올라간다. 건너뛰면
+     * 817ms(85%)로 떨어지고, 수신측이 받는 정보는 달라지지 않는다. */
+    if (hall_sent_once[ch] && ((now - hall_last_sent_tick[ch]) < 30000u))
+    {
+      continue;
+    }
+
+    /* Heartbeat should not affect cooldown timestamps (HallEmitIfAllowed). */
+
+    SensorEvent_t evt = {
+      .type = EVT_HALL,
+      .slot = ch,
+      .state = hall_debounced_state[ch],
+      .energy = 0.0f
+    };
+    osMessageQueuePut(sensorEventQueueHandle, &evt, 0, 0);
+  }
+  /* USER CODE END HallHeartbeatTimerCallback */
 }
 
 /* USER CODE BEGIN Header_StartTaskPacketTX */
@@ -460,7 +790,7 @@ void StartTaskPacketTX(void *argument)
 #if SENSOR_DEBUG_UI
           SensorDashboard_UpdateFlame(evt.state, evt.energy);
 #else
-          SensorProtocol_SendFlameStatus(evt.state);
+          SensorProtocol_SendFlameStatus(evt.state, evt.energy);
 #endif
           break;
       }
@@ -469,13 +799,52 @@ void StartTaskPacketTX(void *argument)
   /* USER CODE END StartTaskPacketTX */
 }
 
+/* USER CODE BEGIN Header_StartTaskCommandRX */
+/**
+* @brief Function implementing the TaskCommandRX thread. Blocks on the
+* line-ready semaphore AlertCommand_OnByteReceived (main.c, ISR context)
+* releases, then parses and acts on one AlertCommand line per wake. See
+* alert_command.c/.h.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartTaskCommandRX */
+void StartTaskCommandRX(void *argument)
+{
+  /* USER CODE BEGIN StartTaskCommandRX */
+  (void)argument;
+  AlertCommand_Task();
+  /* USER CODE END StartTaskCommandRX */
+}
+
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
 void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
 {
   (void)xTask;
-  (void)pcTaskName;
-  Error_Handler();
+
+  /* 예전에는 그냥 Error_Handler() 였는데, 그러면 무한 루프에 빠지면서
+   * 아무 흔적도 안 남는다. 로그가 뚝 끊긴 것만 보이고 원인은 안 보여서
+   * "LoRa 가 안 된다"로 오진하게 된다 -- 실제로 그렇게 반나절을 썼다.
+   *
+   * printf 는 쓰지 않는다. 지금은 스택이 이미 망가진 상태라 그 자체가
+   * 위험하다. HAL 로 고정 문자열만 직접 밀어낸다. */
+  const char *msg = "\r\n!!! STACK OVERFLOW: ";
+  HAL_UART_Transmit(&huart2, (uint8_t *)msg, (uint16_t)strlen(msg), 100);
+  if (pcTaskName)
+  {
+    HAL_UART_Transmit(&huart2, (uint8_t *)pcTaskName,
+                      (uint16_t)strlen(pcTaskName), 100);
+  }
+  msg = " -- 해당 태스크의 stack_size 를 키울 것\r\n";
+  HAL_UART_Transmit(&huart2, (uint8_t *)msg, (uint16_t)strlen(msg), 100);
+
+  /* LD2 빠른 깜빡임으로도 알린다. 콘솔을 안 보고 있어도 눈에 띈다. */
+  for (;;)
+  {
+    HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
+    HAL_Delay(80);
+  }
 }
 /* USER CODE END Application */
 

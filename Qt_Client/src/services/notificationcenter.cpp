@@ -47,6 +47,7 @@ void NotificationCenter::ingestEvent(const MonitoringEvent &event)
 
     NotificationRecord record;
     record.id = QStringLiteral("N%1").arg(m_nextNotificationId++);
+    record.eventId = event.id;
     record.time = monitoringEventTimeText(event);
     record.sourceId = decision.sourceId;
     record.eventType = decision.eventType;

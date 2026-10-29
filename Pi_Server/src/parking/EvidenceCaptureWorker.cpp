@@ -26,11 +26,15 @@ EvidenceCaptureWorker::EvidenceCaptureWorker(
     snapshot::SnapshotStorage& storage,
     database::EventDatabase& database,
     Config config,
-    Completion completion)
+    Completion completion,
+    Capture capture,
+    RoiResolver roi_resolver)
     : storage_(storage),
       database_(database),
       config_(std::move(config)),
-      completion_(std::move(completion)) {
+      completion_(std::move(completion)),
+      capture_(std::move(capture)),
+      roi_resolver_(std::move(roi_resolver)) {
     if (config_.overstayDelay <= std::chrono::seconds::zero() ||
         config_.maxPendingJobs < 2) {
         throw std::invalid_argument("invalid evidence capture worker config");
@@ -128,7 +132,7 @@ bool EvidenceCaptureWorker::scheduleSessionImpl(
     const auto slot_id = request.slotId;
     const auto channel_id = request.channel->channel_id;
     if (include_start) {
-        jobs_.push(Job{now, nextSequence_++, request,
+        jobs_.push(Job{now, nextSequence_++, 0, request,
                        EvidenceReason::OccupancyStart, !include_overstay});
         util::logLine("EVIDENCE_CAPTURE",
             std::string(restored ? "restored start capture" :
@@ -139,7 +143,7 @@ bool EvidenceCaptureWorker::scheduleSessionImpl(
     }
     if (include_overstay) {
         jobs_.push(Job{request.startedAtMonotonic + config_.overstayDelay,
-                       nextSequence_++, std::move(request),
+                       nextSequence_++, overstayGeneration_, std::move(request),
                        EvidenceReason::Overstay, true});
         util::logLine("EVIDENCE_CAPTURE",
             std::string(restored ? "restored overstay capture" :
@@ -206,6 +210,36 @@ bool EvidenceCaptureWorker::expediteOverstay(
     return found;
 }
 
+std::size_t EvidenceCaptureWorker::updateOverstayDelay(
+    const std::chrono::milliseconds delay) {
+    if (delay <= std::chrono::milliseconds::zero()) {
+        throw std::invalid_argument("overstay evidence delay must be positive");
+    }
+    std::lock_guard lock(mutex_);
+    config_.overstayDelay = delay;
+    ++overstayGeneration_;
+    std::size_t updated{};
+    std::vector<Job> rebuilt;
+    rebuilt.reserve(jobs_.size());
+    while (!jobs_.empty()) {
+        Job job = jobs_.top();
+        jobs_.pop();
+        if (job.reason == EvidenceReason::Overstay) {
+            job.deadline = job.request.startedAtMonotonic + delay;
+            job.generation = overstayGeneration_;
+            ++updated;
+        }
+        rebuilt.push_back(std::move(job));
+    }
+    jobs_ = decltype(jobs_){Later{}, std::move(rebuilt)};
+    condition_.notify_all();
+    util::logLine("EVIDENCE_CAPTURE",
+        "active overstay captures rescheduled count=" +
+        std::to_string(updated) + " delay_ms=" +
+        std::to_string(delay.count()));
+    return updated;
+}
+
 std::size_t EvidenceCaptureWorker::pendingCount() const {
     std::lock_guard lock(mutex_);
     return jobs_.size();
@@ -233,6 +267,10 @@ void EvidenceCaptureWorker::run() noexcept {
             if (jobs_.empty() || jobs_.top().deadline > Clock::now()) continue;
             Job job = jobs_.top();
             jobs_.pop();
+            if (job.reason == EvidenceReason::Overstay &&
+                job.generation != overstayGeneration_) {
+                continue;
+            }
             if (canceledSessions_.contains(job.request.sessionId)) {
                 util::logLine("EVIDENCE_CAPTURE",
                     "capture canceled session=" +
@@ -274,23 +312,50 @@ void EvidenceCaptureWorker::process(Job job) noexcept {
     const std::string channel_id = job.request.channel
         ? job.request.channel->channel_id : std::string{};
     EvidenceCaptureResult result{session_id, job.request.slotId, channel_id,
-                                 job.reason, {}, false, false, {}};
+                                 job.reason, {}, {}, job.request.roi,
+                                 job.request.roiRevision, false, false, {}};
     if (canceled(session_id)) return;
 
     try {
-        const std::string path = storage_.saveEvidenceSnapshot(
-            job.request.channel, session_id, job.request.slotId, reason,
-            job.request.roi);
-        result.imagePath = path;
+        if (roi_resolver_) {
+            const auto applied = roi_resolver_(job.request.slotId);
+            if (!applied) {
+                result.message = "runtime ROI is not configured";
+                emit(std::move(result));
+                return;
+            }
+            job.request.roi = applied->value;
+            job.request.roiRevision = applied->revision;
+            result.roi = applied->value;
+            result.roiRevision = applied->revision;
+        }
+        snapshot::StoredImagePair paths;
+        if (capture_) {
+            paths = capture_(job.request, job.reason);
+        } else {
+            paths.originalPath = storage_.saveEvidenceSnapshot(
+                job.request.channel, session_id, job.request.slotId, reason,
+                job.request.roi);
+        }
+        result.imagePath = paths.originalPath;
+        result.enhancedImagePath = paths.enhancedPath;
         std::error_code file_error;
-        if (path.empty() ||
-            !std::filesystem::is_regular_file(path, file_error) || file_error) {
-            if (!path.empty()) {
+        const bool original_valid = !paths.originalPath.empty() &&
+            std::filesystem::is_regular_file(paths.originalPath, file_error) &&
+            !file_error;
+        file_error.clear();
+        const bool enhanced_valid = paths.enhancedPath.empty() ||
+            (std::filesystem::is_regular_file(paths.enhancedPath, file_error) &&
+             !file_error);
+        if (!original_valid || !enhanced_valid) {
+            for (const auto* path : {&paths.originalPath, &paths.enhancedPath}) {
+                if (path->empty()) continue;
                 std::error_code ignored;
-                std::filesystem::remove(path, ignored);
+                std::filesystem::remove(*path, ignored);
             }
             result.imagePath.clear();
-            result.message = "FrameBuffer/ROI/image file save failed";
+            result.enhancedImagePath.clear();
+            result.message = "camera API/FrameBuffer image file save failed";
             util::logError("Evidence capture failed: session=" +
                 std::to_string(session_id) + " slot=" + job.request.slotId +
                 " channel=" + channel_id + " reason=" + reason +
@@ -299,11 +364,17 @@ void EvidenceCaptureWorker::process(Job job) noexcept {
             return;
         }
         const auto inserted = database_.insertEvidenceImage(
-            session_id, path, reason, parking_timer::utcNow());
+            session_id, paths.originalPath, reason, parking_timer::utcNow(),
+            paths.enhancedPath, job.request.roi,
+            job.request.roiRevision);
         if (inserted != database::EvidenceInsertResult::Inserted) {
-            std::error_code ignored;
-            std::filesystem::remove(path, ignored);
+            for (const auto* path : {&paths.originalPath, &paths.enhancedPath}) {
+                if (path->empty()) continue;
+                std::error_code ignored;
+                std::filesystem::remove(*path, ignored);
+            }
             result.imagePath.clear();
+            result.enhancedImagePath.clear();
             result.duplicate =
                 inserted == database::EvidenceInsertResult::Duplicate;
             result.message = result.duplicate
@@ -321,14 +392,18 @@ void EvidenceCaptureWorker::process(Job job) noexcept {
         util::logLine("EVIDENCE_CAPTURE",
             "capture success session=" + std::to_string(session_id) +
             " slot=" + job.request.slotId + " channel=" + channel_id +
-            " reason=" + reason + " path=" + path);
+            " reason=" + reason + " path=" + paths.originalPath +
+            " enhanced=" + paths.enhancedPath);
         emit(std::move(result));
     } catch (const std::exception& error) {
-        if (!result.imagePath.empty()) {
+        for (const auto* path : {&result.imagePath,
+                                 &result.enhancedImagePath}) {
+            if (path->empty()) continue;
             std::error_code ignored;
-            std::filesystem::remove(result.imagePath, ignored);
+            std::filesystem::remove(*path, ignored);
         }
         result.imagePath.clear();
+        result.enhancedImagePath.clear();
         result.message = error.what();
         util::logError("Evidence DB/save failed: session=" +
             std::to_string(session_id) + " slot=" + job.request.slotId +

@@ -6,6 +6,7 @@
 #include <QGraphicsView>
 #include <QMetaObject>
 #include <QSlider>
+#include <QSpinBox>
 #include <QTableWidget>
 #include <QTemporaryDir>
 
@@ -97,9 +98,15 @@ int main(int argc, char **argv)
     QSlider *widthSlider = sliderWithRange(page, 16, 420);
     QSlider *heightSlider = sliderWithRange(page, 16, 220);
     QSlider *rotationSlider = sliderWithRange(page, -180, 180);
-    if (!widthSlider || !heightSlider || !rotationSlider) return 26;
-    widthSlider->setValue(132);
-    heightSlider->setValue(96);
+    QSpinBox *widthSpin = page.findChild<QSpinBox *>(
+        QStringLiteral("parkingZoneWidthSpin"));
+    QSpinBox *heightSpin = page.findChild<QSpinBox *>(
+        QStringLiteral("parkingZoneHeightSpin"));
+    if (!widthSlider || !heightSlider || !rotationSlider
+        || !widthSpin || !heightSpin) return 26;
+    widthSpin->setValue(132);
+    heightSpin->setValue(96);
+    if (widthSlider->value() != 132 || heightSlider->value() != 96) return 47;
     rotationSlider->setValue(35);
     if (!page.hasUnsavedLayoutChanges()) return 27;
     if (!page.saveLayoutNow(&saveError)) return 28;
@@ -108,6 +115,8 @@ int main(int argc, char **argv)
                                    Qt::DirectConnection)) return 30;
     if (widthSlider->value() != 84
         || heightSlider->value() != 58
+        || widthSpin->value() != 84
+        || heightSpin->value() != 58
         || rotationSlider->value() != 0) return 31;
     if (!page.hasUnsavedLayoutChanges()) return 32;
     if (!page.saveLayoutNow(&saveError)) return 33;

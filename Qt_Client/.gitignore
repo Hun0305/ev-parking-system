@@ -11,6 +11,7 @@ compile_commands.json
 config/client_config.local.ini
 config/camera_config.ini
 config/parking_map_layout.local.json
+config/slot_mapping.local.json
 .env
 *.env
 

@@ -21,7 +21,7 @@ public:
 
 signals:
     void exportResult(bool success, const QString &message);
-    void evidenceRequested(const QString &sourceId);
+    void eventEvidenceRequested(const QString &eventId);
 
 private slots:
     void applyFilters();

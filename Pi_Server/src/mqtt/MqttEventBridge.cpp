@@ -3,42 +3,25 @@
 #include "database/EventDatabase.hpp"
 #include "event/CameraEventParser.hpp"
 #include "event/EventPayloadBuilder.hpp"
+#include "event/IvaEventResolver.hpp"
+#include "notification/TelegramChannelNotifier.hpp"
 #include "ocr/PlateImageEnhancer.hpp"
 #include "util/Logger.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
-#include <cctype>
+#include <chrono>
+#include <cstdint>
+#include <ctime>
+#include <iomanip>
+#include <optional>
 #include <sstream>
 #include <utility>
 
 namespace mqtt {
 
 namespace {
-
-std::string lowerCopy(std::string value) {
-    for (char& c : value)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return value;
-}
-
-const app::IvaAreaConfig* findIvaArea(const app::AppConfig& config,
-                                      const event::CameraEvent& camera_event) {
-    const std::string raw = lowerCopy(camera_event.raw_topic + "\n" +
-                                      camera_event.raw_payload);
-    // 먼저 카메라가 보낸 Area/Rule 이름으로 정확한 주차면을 찾는다.
-    for (const auto& area : config.iva_areas) {
-        if (!area.area_name.empty() &&
-            raw.find(lowerCopy(area.area_name)) != std::string::npos)
-            return &area;
-    }
-    // Firmware가 영역명을 생략하면 ONVIF VideoSourceToken 채널을 fallback으로 사용한다.
-    for (const auto& area : config.iva_areas) {
-        if (area.channel_id == camera_event.event_channel_id) return &area;
-    }
-    return nullptr;
-}
 
 std::shared_ptr<camera::CameraChannel> findChannel(
     const std::vector<std::shared_ptr<camera::CameraChannel>>& channels,
@@ -48,6 +31,91 @@ std::shared_ptr<camera::CameraChannel> findChannel(
     return nullptr;
 }
 
+bool hasTopicSegment(const std::string& topic, const std::string& segment) {
+    if (segment.empty()) return false;
+    std::size_t begin{};
+    while (begin <= topic.size()) {
+        const std::size_t end = topic.find('/', begin);
+        if (topic.substr(begin, end - begin) == segment) return true;
+        if (end == std::string::npos) break;
+        begin = end + 1;
+    }
+    return false;
+}
+
+event::IvaOccupancyAction toOccupancyAction(const std::string& action) {
+    if (action == "ENTER") return event::IvaOccupancyAction::Enter;
+    if (action == "INTRUSION") return event::IvaOccupancyAction::Intrusion;
+    if (action == "EXIT") return event::IvaOccupancyAction::Exit;
+    return event::IvaOccupancyAction::Unsupported;
+}
+
+std::optional<std::chrono::system_clock::time_point> parseCameraUtc(
+    const std::string& value) {
+    if (value.size() < 20) return std::nullopt;
+    std::tm utc{};
+    std::istringstream input(value.substr(0, 19));
+    input >> std::get_time(&utc, "%Y-%m-%dT%H:%M:%S");
+    if (input.fail()) return std::nullopt;
+
+    std::size_t cursor = 19;
+    std::chrono::milliseconds fraction{};
+    if (cursor < value.size() && value[cursor] == '.') {
+        ++cursor;
+        int milliseconds{};
+        int digits{};
+        while (cursor < value.size() && value[cursor] >= '0' &&
+               value[cursor] <= '9') {
+            if (digits < 3)
+                milliseconds = milliseconds * 10 + (value[cursor] - '0');
+            ++digits;
+            ++cursor;
+        }
+        if (digits == 0) return std::nullopt;
+        while (digits < 3) {
+            milliseconds *= 10;
+            ++digits;
+        }
+        fraction = std::chrono::milliseconds(milliseconds);
+    }
+
+    int offset_seconds{};
+    if (cursor < value.size() &&
+        (value[cursor] == 'Z' || value[cursor] == 'z')) {
+        ++cursor;
+    } else if (cursor + 6 == value.size() &&
+               (value[cursor] == '+' || value[cursor] == '-') &&
+               value[cursor + 3] == ':') {
+        const auto digit = [&value](const std::size_t index) -> int {
+            return value[index] >= '0' && value[index] <= '9'
+                ? value[index] - '0' : -1;
+        };
+        const int h1 = digit(cursor + 1);
+        const int h2 = digit(cursor + 2);
+        const int m1 = digit(cursor + 4);
+        const int m2 = digit(cursor + 5);
+        if (h1 < 0 || h2 < 0 || m1 < 0 || m2 < 0) return std::nullopt;
+        const int hours = h1 * 10 + h2;
+        const int minutes = m1 * 10 + m2;
+        if (hours > 23 || minutes > 59) return std::nullopt;
+        offset_seconds = (hours * 60 + minutes) * 60;
+        if (value[cursor] == '-') offset_seconds = -offset_seconds;
+        cursor += 6;
+    } else {
+        return std::nullopt;
+    }
+    if (cursor != value.size()) return std::nullopt;
+
+#if defined(_WIN32)
+    const std::time_t seconds = _mkgmtime(&utc);
+#else
+    const std::time_t seconds = timegm(&utc);
+#endif
+    if (seconds == static_cast<std::time_t>(-1)) return std::nullopt;
+    return std::chrono::system_clock::from_time_t(seconds) + fraction -
+        std::chrono::seconds(offset_seconds);
+}
+
 }
 
 MqttEventBridge::MqttEventBridge(
@@ -55,87 +123,170 @@ MqttEventBridge::MqttEventBridge(
     std::vector<std::shared_ptr<camera::CameraChannel>>& channels,
     database::EventDatabase& database,
     snapshot::SnapshotStorage& snapshot_storage,
-    parking::ParkingTriggerCoordinator& trigger_coordinator,
     ocr::OcrWorker& ocr_worker,
+    std::vector<parking::ParkingSlotConfig> parking_slot_configs,
     SensorMessageHandler sensor_message_handler,
-    FireAckHandler fire_ack_handler
+    FireAckHandler fire_ack_handler,
+    IvaOccupancyHandler iva_occupancy_handler,
+    std::unique_ptr<IMqttTransport> transport,
+    notification::TelegramChannelNotifier* telegram_notifier
 )
     : config_(config),
       channels_(channels),
       database_(database),
       snapshot_storage_(snapshot_storage),
-      trigger_coordinator_(trigger_coordinator),
       ocr_worker_(ocr_worker),
+      parking_slot_configs_(std::move(parking_slot_configs)),
       sensor_message_handler_(std::move(sensor_message_handler)),
       fire_ack_handler_(std::move(fire_ack_handler)),
-      mosq_(nullptr) {
+      iva_occupancy_handler_(std::move(iva_occupancy_handler)),
+      telegram_notifier_(telegram_notifier),
+      endpoint_(std::move(transport)) {
+    endpoint_.bindApplicationHandler(
+        [this](const std::string& topic, const std::string& payload) {
+            onMessage(topic, payload);
+        });
+    IMqttTransport::ObserverCallbacks observers;
+    observers.onFact = [this](const MqttTransportFact& fact) {
+        if (transport_fact_handler_ && !transport_fact_handler_(fact)) {
+            util::logError(
+                "MQTT transport fact queue rejected an observation");
+        }
+    };
+    endpoint_.bindTransportObservers(std::move(observers));
+}
+
+std::string stableEventIdentity(const std::string& topic,
+                                const std::string& payload,
+                                const std::string& discriminator) {
+    std::uint64_t hash = 14695981039346656037ULL;
+    const auto add = [&hash](const std::string_view value) {
+        for (const unsigned char byte : value) {
+            hash ^= static_cast<std::uint64_t>(byte);
+            hash *= 1099511628211ULL;
+        }
+    };
+    add(topic);
+    add("\n");
+    add(payload);
+    add("\n");
+    add(discriminator);
+    std::ostringstream output;
+    output << "camera-mqtt:" << std::hex << std::setw(16)
+           << std::setfill('0') << hash;
+    return output.str();
+}
+
+MqttEventBridge::~MqttEventBridge() {
+    if (!stop()) std::terminate();
+}
+
+bool MqttEventBridge::bindSensorMessageHandler(SensorMessageHandler handler) {
+    std::lock_guard lock(lifecycle_mutex_);
+    if (endpoint_.state() != MqttEndpointState::Constructed || !handler)
+        return false;
+    sensor_message_handler_ = std::move(handler);
+    return true;
+}
+
+bool MqttEventBridge::bindFireAckHandler(FireAckHandler handler) {
+    std::lock_guard lock(lifecycle_mutex_);
+    if (endpoint_.state() != MqttEndpointState::Constructed || !handler)
+        return false;
+    fire_ack_handler_ = std::move(handler);
+    return true;
+}
+
+bool MqttEventBridge::bindIvaOccupancyHandler(IvaOccupancyHandler handler) {
+    std::lock_guard lock(lifecycle_mutex_);
+    if (endpoint_.state() != MqttEndpointState::Constructed || !handler)
+        return false;
+    iva_occupancy_handler_ = std::move(handler);
+    return true;
+}
+
+bool MqttEventBridge::bindTransportFactHandler(
+    TransportFactHandler handler) {
+    std::lock_guard lock(lifecycle_mutex_);
+    if (endpoint_.state() != MqttEndpointState::Constructed || !handler)
+        return false;
+    transport_fact_handler_ = std::move(handler);
+    return true;
+}
+
+bool MqttEventBridge::bindRegularEgressAdmission(
+    RegularEgressAdmission admission) {
+    std::lock_guard lock(lifecycle_mutex_);
+    if (endpoint_.state() != MqttEndpointState::Constructed || !admission)
+        return false;
+    regular_egress_admission_ = std::move(admission);
+    return true;
+}
+
+bool MqttEventBridge::bindParkingRoiResolver(RoiResolver resolver) {
+    std::lock_guard lock(lifecycle_mutex_);
+    if (endpoint_.state() != MqttEndpointState::Constructed || !resolver)
+        return false;
+    roi_resolver_ = std::move(resolver);
+    return true;
+}
+
+bool MqttEventBridge::bindCameraSnapshotGenerator(
+    CameraSnapshotGenerator generator) {
+    std::lock_guard lock(lifecycle_mutex_);
+    if (endpoint_.state() != MqttEndpointState::Constructed || !generator)
+        return false;
+    camera_snapshot_generator_ = std::move(generator);
+    return true;
 }
 
 bool MqttEventBridge::start() {
-    // libmosquitto 전역 초기화 후 이 서버 전용 client id로 broker에 접속한다.
-    mosquitto_lib_init();
-
-    std::string client_id = "pi-server-" + config_.camera_id;
-
-    mosq_ = mosquitto_new(client_id.c_str(), true, this);
-
-    if (!mosq_) {
-        util::logError("mosquitto_new failed");
+    std::lock_guard lock(lifecycle_mutex_);
+    if (config_.fire_alarm_enabled && !fire_ack_handler_) {
+        util::logError("MQTT start rejected: Fire ACK target is not bound");
+        return false;
+    }
+    if (config_.fire_alarm_enabled && !transport_fact_handler_) {
+        util::logError(
+            "MQTT start rejected: Fire delivery fact target is not bound");
+        return false;
+    }
+    if (config_.fire_alarm_enabled && !regular_egress_admission_) {
+        util::logError(
+            "MQTT start rejected: Fire-priority egress gate is not bound");
+        return false;
+    }
+    if (config_.hall_mqtt_input_enabled &&
+        (config_.parking_occupancy_source == "HALL" ||
+         config_.parking_occupancy_source == "HYBRID_OR") &&
+        !sensor_message_handler_) {
+        util::logError("MQTT start rejected: Hall target is not bound");
+        return false;
+    }
+    if ((config_.parking_occupancy_source == "CAMERA_IVA" ||
+         config_.parking_occupancy_source == "HYBRID_OR") &&
+        !iva_occupancy_handler_) {
+        util::logError("MQTT start rejected: CAMERA_IVA target is not bound");
         return false;
     }
 
-    mosquitto_message_callback_set(mosq_, MqttEventBridge::onMessageStatic);
-
-    int rc = mosquitto_connect(
-        mosq_,
-        config_.mqtt_host.c_str(),
-        config_.mqtt_port,
-        60
-    );
-
-    if (rc != MOSQ_ERR_SUCCESS) {
-        util::logError(std::string("MQTT connect failed: ") + mosquitto_strerror(rc));
-        return false;
+    std::vector<MqttSubscription> subscriptions;
+    if (config_.hall_mqtt_input_enabled &&
+        (config_.parking_occupancy_source == "HALL" ||
+         config_.parking_occupancy_source == "HYBRID_OR")) {
+        subscriptions.push_back({config_.hall_mqtt_topic, 1});
     }
-
-    if (config_.hall_mqtt_input_enabled) {
-        rc = mosquitto_subscribe(
-            mosq_, nullptr, config_.hall_mqtt_topic.c_str(), 1);
-        if (rc != MOSQ_ERR_SUCCESS) {
-            util::logError(std::string("Hall MQTT subscribe failed: ") +
-                           mosquitto_strerror(rc));
-            return false;
-        }
+    if (config_.fire_alarm_enabled) {
+        subscriptions.push_back(
+            {config_.fire_command_topic_prefix + "/+", 1});
     }
+    subscriptions.push_back({config_.mqtt_event_sub_topic, 0});
 
-    if (config_.fire_alarm_enabled && fire_ack_handler_) {
-        const std::string command_filter =
-            config_.fire_command_topic_prefix + "/+";
-        rc = mosquitto_subscribe(
-            mosq_, nullptr, command_filter.c_str(), 1);
-        if (rc != MOSQ_ERR_SUCCESS) {
-            util::logError(std::string("Fire ACK MQTT subscribe failed: ") +
-                           mosquitto_strerror(rc));
-            return false;
-        }
-    }
-
-    rc = mosquitto_subscribe(
-        mosq_,
-        nullptr,
-        config_.mqtt_event_sub_topic.c_str(),
-        0
-    );
-
-    if (rc != MOSQ_ERR_SUCCESS) {
-        util::logError(std::string("MQTT subscribe failed: ") + mosquitto_strerror(rc));
-        return false;
-    }
-
-    rc = mosquitto_loop_start(mosq_);
-
-    if (rc != MOSQ_ERR_SUCCESS) {
-        util::logError(std::string("MQTT loop start failed: ") + mosquitto_strerror(rc));
+    if (!endpoint_.start(
+            {"pi-server-" + config_.camera_id, config_.mqtt_host,
+             config_.mqtt_port, 60},
+            subscriptions)) {
+        util::logError("MQTT transport start failed");
         return false;
     }
 
@@ -159,46 +310,49 @@ bool MqttEventBridge::start() {
     return true;
 }
 
-void MqttEventBridge::stop() {
-    if (mosq_) {
-        mosquitto_loop_stop(mosq_, true);
-        mosquitto_destroy(mosq_);
-        mosq_ = nullptr;
-    }
-
-    mosquitto_lib_cleanup();
+void MqttEventBridge::closeIngress() noexcept {
+    std::lock_guard lock(lifecycle_mutex_);
+    endpoint_.closeIngress();
 }
 
-void MqttEventBridge::onMessageStatic(
-    mosquitto* mosq,
-    void* userdata,
-    const mosquitto_message* message
-) {
-    if (!userdata) {
-        return;
-    }
-
-    auto* self = static_cast<MqttEventBridge*>(userdata);
-    self->onMessage(mosq, message);
+bool MqttEventBridge::quiesceIngress(
+    const std::chrono::milliseconds timeout) {
+    std::lock_guard lock(lifecycle_mutex_);
+    const bool drained = endpoint_.quiesceIngress(timeout);
+    if (!drained)
+        util::logError("MQTT application callback drain timed out");
+    return drained;
 }
 
-void MqttEventBridge::onMessage(mosquitto* mosq, const mosquitto_message* message) {
-    (void)mosq;
+bool MqttEventBridge::quiesceTransportObservers(
+    const std::chrono::milliseconds timeout) {
+    std::lock_guard lock(lifecycle_mutex_);
+    const bool drained = endpoint_.quiesceTransportObservers(timeout);
+    if (!drained)
+        util::logError("MQTT transport observer drain timed out");
+    return drained;
+}
 
-    if (!message || !message->topic) {
-        return;
-    }
+bool MqttEventBridge::abortActiveEpoch(
+    const MqttConnectionEpoch expectedEpoch) noexcept {
+    std::lock_guard lock(lifecycle_mutex_);
+    return endpoint_.abortActiveEpoch(expectedEpoch);
+}
 
-    std::string raw_topic = message->topic;
-    std::string raw_payload;
+bool MqttEventBridge::stop(const std::chrono::milliseconds timeout) {
+    std::lock_guard lock(lifecycle_mutex_);
+    const bool stopped = endpoint_.stop(timeout);
+    if (!stopped)
+        util::logError("MQTT transport callback join failed or timed out");
+    return stopped;
+}
 
-    if (message->payload && message->payloadlen > 0) {
-        raw_payload.assign(
-            static_cast<const char*>(message->payload),
-            message->payloadlen
-        );
-    }
+MqttEndpointState MqttEventBridge::state() const noexcept {
+    return endpoint_.state();
+}
 
+void MqttEventBridge::onMessage(const std::string& raw_topic,
+                                const std::string& raw_payload) {
 
     if (config_.hall_mqtt_input_enabled &&
         raw_topic == config_.hall_mqtt_topic) {
@@ -244,53 +398,241 @@ void MqttEventBridge::onMessage(mosquitto* mosq, const mosquitto_message* messag
         return;
     }
 
-    // 카메라마다 다른 raw topic을 서버 내부의 공통 이벤트 형식으로 정규화한다.
-    event::CameraEvent camera_event =
-        event::CameraEventParser::parse(
-            raw_topic,
-            raw_payload,
-            config_.default_channel_id
-        );
+    // 한 PUBLISH에 여러 ONVIF NotificationMessage가 묶여도 각각 처리한다.
+    auto camera_events = event::CameraEventParser::parseMany(
+        raw_topic, raw_payload, config_.default_channel_id);
+    if (camera_events.size() > 1) {
+        util::logLine("CAMERA_EVENT",
+                      "bundled notifications parsed count=" +
+                          std::to_string(camera_events.size()) +
+                          " topic=" + raw_topic);
+    }
+    // parseMany preserves the NotificationMessage order from the camera.
+    // Reordering by action reverses valid INTRUSION(T1)->EXIT(T2) bundles and
+    // makes the older occupancy state win, so enqueue facts causally as sent.
+    for (auto& camera_event : camera_events) {
+        processCameraEvent(std::move(camera_event));
+    }
+}
+
+void MqttEventBridge::processCameraEvent(event::CameraEvent camera_event) {
+    const std::string& raw_topic = camera_event.raw_topic;
 
     // IVA Area 이벤트는 모든 채널이 아니라 해당 주차면의 채널/ROI만 증거로 저장한다.
     if (camera_event.is_iva_area_event) {
-        // 동일 topic의 false/off 알림은 영역 해제 이벤트이므로 입차 사진을 만들지 않는다.
-        if (!camera_event.is_active) {
-            util::logInfo("IVA area inactive event ignored: " + raw_topic);
+        if (!camera_event.protocol_valid) {
+            util::logWarn("IVA protocol rejected: " +
+                          camera_event.protocol_error + " topic=" + raw_topic);
             return;
         }
-        const app::IvaAreaConfig* area = findIvaArea(config_, camera_event);
-        if (area == nullptr) {
-            util::logWarn("IVA area event received but no area mapping matched");
+        std::string mapping_error;
+        const auto target = event::IvaEventResolver::resolve(
+            config_.camera_id, camera_event, parking_slot_configs_,
+            config_.iva_areas, &mapping_error);
+        if (!target) {
+            util::logWarn(
+                "IVA area event rejected: " + mapping_error +
+                " token=" + camera_event.video_source_token +
+                " topic=" + raw_topic);
             return;
         }
-        std::shared_ptr<camera::CameraChannel> channel =
-            findChannel(channels_, area->channel_id);
-        if (!channel) {
-            util::logError("IVA mapped RTSP channel is not configured: " +
-                           area->channel_id);
+        if (camera_event.is_smart_parking_iva) {
+            if (camera_event.declared_camera_id != config_.camera_id ||
+                camera_event.source_id != config_.camera_id ||
+                camera_event.slot_id != target->slotId ||
+                !hasTopicSegment(raw_topic, target->slotId) ||
+                !hasTopicSegment(raw_topic,
+                    camera_event.action == "ENTER"
+                        ? "enter"
+                        : (camera_event.action == "INTRUSION"
+                               ? "intrusion"
+                               : "exit"))) {
+                util::logWarn(
+                    "IVA protocol rejected: topic/payload/config mismatch "
+                    "topic=" + raw_topic + " slot=" + target->slotId);
+                return;
+            }
+
+            // Event Rule을 작동시키기 위한 고정 Publication이다. 같은 감지에서
+            // 이어지는 원본 WiseAI 메시지가 UtcTime/ObjectId를 제공하므로,
+            // 고정 메시지는 경고 없이 버리고 점유 상태를 변경하지 않는다.
             return;
         }
 
-        camera_event.iva_area_id = area->area_name;
-        camera_event.slot_id = area->slot_id;
-        // BestShot metadata가 뒤이어 도착하면 같은 주차면으로 연결할 pending을 만든다.
-        if (!trigger_coordinator_.recordCameraIva(area->slot_id, area->channel_id))
+        const auto iva_action = toOccupancyAction(camera_event.action);
+        if (config_.parking_occupancy_source == "CAMERA_IVA" ||
+            config_.parking_occupancy_source == "HYBRID_OR") {
+            if (!iva_occupancy_handler_) {
+                util::logError("IVA occupancy handler is not configured");
+                return;
+            }
+            // 원본 WiseAI 관측만 점유를 변경한다. 고정된 주차면의 점유는
+            // camera/token/rule 영역 상태로 판단하며 ObjectId는 진단용
+            // 메타데이터일 뿐 점유 생애주기의 식별자로 사용하지 않는다.
+            if (!camera_event.timestamp_from_source) {
+                util::logWarn(
+                    "IVA occupancy rejected: source timestamp is missing "
+                    "topic=" + raw_topic);
+                return;
+            }
+            const auto source_time = parseCameraUtc(camera_event.timestamp);
+            if (!source_time) {
+                util::logWarn(
+                    "IVA occupancy rejected: invalid camera UtcTime topic=" +
+                    raw_topic);
+                return;
+            }
+            event::IvaOccupancySignal signal;
+            signal.slotId = target->slotId;
+            signal.cameraId = config_.camera_id;
+            signal.channelId = target->channelId;
+            signal.videoSourceToken = camera_event.video_source_token;
+            signal.ruleName = target->ruleName;
+            signal.objectId = camera_event.object_id;
+            signal.action = iva_action;
+            signal.authoritativeExit = true;
+            signal.occupancyAuthority = true;
+            signal.sourceIdentity = stableEventIdentity(
+                raw_topic, {},
+                target->slotId + "|" + camera_event.video_source_token +
+                    "|" + target->ruleName + "|" + camera_event.action +
+                    "|" + camera_event.timestamp);
+            signal.occurredAt = *source_time;
+            signal.occurredAtFromSource = true;
+            if (!iva_occupancy_handler_(signal)) {
+                util::logWarn("IVA occupancy event was not accepted: slot=" +
+                              target->slotId + " action=" +
+                              camera_event.action);
+            }
             return;
-        snapshot::NormalizedRoi roi{area->roi_x, area->roi_y,
-                                    area->roi_width, area->roi_height};
-        std::string snapshot_path = snapshot_storage_.saveIvaAreaSnapshot(
-            channel, area->slot_id, roi);
+        }
+
+        // HALL 모드에서는 IVA가 세션을 종료하지 않고 촬영 후보로만 동작한다.
+        if (iva_action != event::IvaOccupancyAction::Intrusion ||
+            !camera_event.is_active) {
+            util::logInfo("IVA action ignored in HALL mode: action=" +
+                          camera_event.action + " topic=" + raw_topic);
+            return;
+        }
+        if (!iva_occupancy_handler_ || !camera_event.timestamp_from_source ||
+            camera_event.object_id.empty()) {
+            util::logWarn(
+                "IVA correlation rejected: exact source time/ObjectId or "
+                "durable handler is missing topic=" + raw_topic);
+            return;
+        }
+        const auto source_time = parseCameraUtc(camera_event.timestamp);
+        if (!source_time) {
+            util::logWarn(
+                "IVA correlation rejected: invalid camera UtcTime topic=" +
+                raw_topic);
+            return;
+        }
+        event::IvaOccupancySignal correlation_signal;
+        correlation_signal.slotId = target->slotId;
+        correlation_signal.cameraId = config_.camera_id;
+        correlation_signal.channelId = target->channelId;
+        correlation_signal.videoSourceToken = camera_event.video_source_token;
+        correlation_signal.ruleName = target->ruleName;
+        correlation_signal.objectId = camera_event.object_id;
+        correlation_signal.action = iva_action;
+        correlation_signal.authoritativeExit = false;
+        correlation_signal.occupancyAuthority = false;
+        correlation_signal.sourceIdentity = stableEventIdentity(
+            raw_topic, camera_event.raw_payload,
+            target->slotId + "|" + camera_event.video_source_token + "|" +
+                target->ruleName + "|" + camera_event.object_id + "|" +
+                camera_event.action + "|" + camera_event.timestamp);
+        correlation_signal.occurredAt = *source_time;
+        correlation_signal.occurredAtFromSource = true;
+        if (!iva_occupancy_handler_(correlation_signal)) {
+            util::logWarn("IVA correlation was not durably accepted: slot=" +
+                          target->slotId + " object=" +
+                          camera_event.object_id);
+            return;
+        }
+        std::shared_ptr<camera::CameraChannel> channel =
+            findChannel(channels_, target->channelId);
+        if (!channel) {
+            util::logError("IVA mapped RTSP channel is not configured: " +
+                           target->channelId);
+            return;
+        }
+
+        camera_event.rule_name = target->ruleName;
+        camera_event.iva_area_id = target->areaName;
+        camera_event.slot_id = target->slotId;
+        // BestShot metadata가 뒤이어 도착하면 같은 주차면으로 연결할 pending을 만든다.
+        if (!roi_resolver_) {
+            util::logError("IVA snapshot rejected: runtime ROI resolver is "
+                           "not configured");
+            return;
+        }
+        const auto applied_roi = roi_resolver_(target->slotId);
+        if (!applied_roi) {
+            util::logError("IVA snapshot rejected: runtime ROI is missing: "
+                           "slot=" + target->slotId);
+            return;
+        }
+        std::string snapshot_path;
         std::string enhanced_path;
-        if (!snapshot_path.empty())
-            enhanced_path = ocr::enhanceIvaSceneImage(snapshot_path);
+        bool camera_api_snapshot_saved = false;
+        if (camera_snapshot_generator_) {
+            int snapshot_api_channel = 0;
+            for (const auto& area : config_.iva_areas) {
+                if (area.slot_id == target->slotId &&
+                    area.area_name == target->areaName &&
+                    area.channel_id == target->channelId) {
+                    snapshot_api_channel = area.snapshot_api_channel;
+                    break;
+                }
+            }
+            camera::CameraGeneratedImages generated;
+            if (camera_snapshot_generator_(snapshot_api_channel, generated)) {
+                const auto paths = snapshot_storage_.saveCameraApiIvaSnapshot(
+                    channel->channel_id, target->slotId, applied_roi->value,
+                    generated.originalJpeg, generated.enhancedJpeg);
+                snapshot_path = paths.originalPath;
+                enhanced_path = paths.enhancedPath;
+                camera_api_snapshot_saved = !snapshot_path.empty() &&
+                    !enhanced_path.empty();
+                if (camera_api_snapshot_saved) {
+                    util::logLine(
+                        "CAMERA_SNAPSHOT_API",
+                        "IVA snapshot stored slot=" + target->slotId +
+                        " area=" + target->areaName +
+                        " channel=" + std::to_string(snapshot_api_channel) +
+                        " run_id=" + generated.runId);
+                }
+            } else {
+                util::logError(
+                    "camera snapshot API IVA capture failed slot=" +
+                    target->slotId + " error=" +
+                    (generated.runId.empty() ? "generator error" :
+                     "empty run result"));
+            }
+        }
+        if (!camera_api_snapshot_saved) {
+            if (camera_snapshot_generator_ &&
+                !config_.camera_snapshot_api_rtsp_fallback) {
+                util::logError(
+                    "IVA snapshot rejected: camera API failed and RTSP "
+                    "fallback is disabled slot=" + target->slotId);
+                return;
+            }
+            snapshot_path = snapshot_storage_.saveIvaAreaSnapshot(
+                channel, target->slotId, applied_roi->value);
+            if (!snapshot_path.empty())
+                enhanced_path = ocr::enhanceIvaSceneImage(snapshot_path);
+        }
         std::string payload_json = event::EventPayloadBuilder::buildJson(
-            config_.camera_id, channel->channel_id, camera_event, snapshot_path);
+            config_.camera_id, channel->channel_id, camera_event, snapshot_path,
+            &*applied_roi);
 
         database::EventRecord record;
         record.camera_id = config_.camera_id;
         record.channel_id = channel->channel_id;
-        record.slot_id = area->slot_id;
+        record.slot_id = target->slotId;
         record.source_type = camera_event.source_type;
         record.source_id = camera_event.source_id;
         record.event_type = camera_event.event_type;
@@ -301,21 +643,36 @@ void MqttEventBridge::onMessage(mosquitto* mosq, const mosquitto_message* messag
         record.raw_payload = camera_event.raw_payload;
         record.payload_json = payload_json;
         record.created_at = camera_event.timestamp;
+        record.applied_roi = applied_roi->value;
+        record.roi_revision = applied_roi->revision;
         database_.insertEvent(record);
         if (!enhanced_path.empty()) {
             database_.attachEnhancedPlateImage(snapshot_path, enhanced_path);
-            ocr_worker_.enqueueScene(area->slot_id, snapshot_path, enhanced_path);
+            ocr_worker_.enqueueScene(target->slotId, snapshot_path, enhanced_path);
         }
         // IVA snapshot은 입차 구역 증빙과 BestShot 연결에 사용한다.
         // Gemini에는 ROI 원본과 개선본을 함께 보내며, 이후 Plate BestShot OCR이
         // 도착하면 주차 세션의 최종 판독값으로 사용한다.
 
-        std::string qt_topic = config_.qt_event_topic_prefix + "/" +
-            config_.camera_id + "/" + channel->channel_id + "/event";
-        publish(qt_topic, payload_json, 0, false);
-        util::logLine("IVA_SNAPSHOT", "slot=" + area->slot_id +
-                      " area=" + area->area_name +
-                      " channel=" + area->channel_id +
+        const std::string event_topic =
+            "parking/v1/events/" + target->slotId;
+        const std::string state_topic =
+            "parking/v1/state/" + target->slotId;
+        // QoS1 packet identifiers cannot be reused while in flight. QoS0
+        // completion callbacks could otherwise alias a durable Fire PUBACK.
+        const bool event_published =
+            publishQtEvent(event_topic, payload_json, 1, false);
+        const bool state_published =
+            publishQtEvent(state_topic, payload_json, 1, true);
+        if (!event_published || !state_published) {
+            util::logWarn("Qt IVA MQTT publish failed: slot=" +
+                          target->slotId);
+        }
+        util::logLine("IVA_SNAPSHOT", "slot=" + target->slotId +
+                      " area=" + target->areaName +
+                      " rule=" + target->ruleName +
+                      " token=" + camera_event.video_source_token +
+                      " channel=" + target->channelId +
                       " snapshot=" + snapshot_path +
                       " enhanced=" + enhanced_path);
         return;
@@ -334,25 +691,32 @@ bool MqttEventBridge::publish(
     const int qos,
     const bool retain
 ) {
-    if (!mosq_) {
+    RegularEgressPermit permit;
+    if (config_.fire_alarm_enabled) {
+        if (!regular_egress_admission_)
+            return false;
+        permit = regular_egress_admission_();
+        if (!permit) {
+            util::logWarn(
+                "MQTT regular publish rejected until Fire retained sync: "
+                "topic=" + topic);
+            return false;
+        }
+        if (!permit.isCurrent()) {
+            util::logWarn(
+                "MQTT regular publish rejected after Fire readiness changed: "
+                "topic=" + topic);
+            return false;
+        }
+    }
+    const auto result = config_.fire_alarm_enabled
+        ? endpoint_.publishInEpoch(
+              topic, payload, qos, retain, permit.epoch())
+        : endpoint_.publish(topic, payload, qos, retain);
+    if (!result.accepted) {
+        util::logError("MQTT publish was not accepted: topic=" + topic);
         return false;
     }
-
-    int rc = mosquitto_publish(
-        mosq_,
-        nullptr,
-        topic.c_str(),
-        static_cast<int>(payload.size()),
-        payload.c_str(),
-        qos,
-        retain
-    );
-
-    if (rc != MOSQ_ERR_SUCCESS) {
-        util::logError(std::string("MQTT publish failed: ") + mosquitto_strerror(rc));
-        return false;
-    }
-
     return true;
 }
 
@@ -360,7 +724,24 @@ bool MqttEventBridge::publishQtEvent(const std::string& topic,
                                      const std::string& payload,
                                      const int qos,
                                      const bool retain) {
-    return publish(topic, payload, qos, retain);
+    const bool published = publish(topic, payload, qos, retain);
+    if (!published) {
+        return false;
+    }
+
+    if (telegram_notifier_) {
+        notification::TelegramMessage message{
+            .topic = topic,
+            .payload = payload,
+            .qos = qos,
+            .retain = retain,
+        };
+        if (!telegram_notifier_->enqueue(std::move(message))) {
+            util::logWarn("Failed to enqueue Telegram event: topic=" + topic);
+        }
+    }
+
+    return true;
 }
 
 bool MqttEventBridge::publishApplicationEvent(const std::string& topic,
@@ -368,6 +749,16 @@ bool MqttEventBridge::publishApplicationEvent(const std::string& topic,
                                               const int qos,
                                               const bool retain) {
     return publish(topic, payload, qos, retain);
+}
+
+MqttTrackedPublishResult MqttEventBridge::publishTrackedFire(
+    const std::string& topic,
+    const std::string& payload,
+    const bool retain,
+    MqttPublishCorrelation correlation,
+    const MqttConnectionEpoch expectedEpoch) {
+    return endpoint_.publishTracked(
+        topic, payload, retain, std::move(correlation), expectedEpoch);
 }
 
 }

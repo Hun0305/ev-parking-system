@@ -69,15 +69,76 @@ QList<ParkingMockData::EventRecord> ParkingMockData::initialEvents()
     };
 }
 
-QStringList ParkingMockData::sampleIncomingMessages()
+#include <QJsonArray>
+#include <QJsonObject>
+
+QJsonArray ParkingMockData::sampleIncomingMessages()
 {
-    return {
-        QStringLiteral("PARKING_SLOT,P01,OCCUPIED"),
-        QStringLiteral("PARKING_SLOT,P02,VACANT"),
-        QStringLiteral("EV_ALERT,EV01,NON_EV"),
-        QStringLiteral("EV_ALERT,EV02,OVERTIME"),
-        QStringLiteral("FIRE_ALARM,CH2,DETECTED"),
-        QStringLiteral("HALL_SENSOR,P03,ERROR"),
-        QStringLiteral("EVENT,CH1,CAMERA_DISCONNECTED,FAILED,RTSP stream disconnected")
-    };
+    QJsonArray messages;
+    
+    messages.append(QJsonObject{
+        {QStringLiteral("event_type"), QStringLiteral("SLOT_OCCUPIED")},
+        {QStringLiteral("slot_id"), QStringLiteral("P-01")},
+        {QStringLiteral("parking_state"), QStringLiteral("OCCUPIED")}
+    });
+
+    messages.append(QJsonObject{
+        {QStringLiteral("event_type"), QStringLiteral("SLOT_VACATED")},
+        {QStringLiteral("slot_id"), QStringLiteral("P-02")},
+        {QStringLiteral("parking_state"), QStringLiteral("VACANT")}
+    });
+
+    messages.append(QJsonObject{
+        {QStringLiteral("event_type"), QStringLiteral("NON_EV_ALERT")},
+        {QStringLiteral("slot_id"), QStringLiteral("EV-01")},
+        {QStringLiteral("vehicle_type"), QStringLiteral("NON_EV")},
+        {QStringLiteral("alarm_state"), QStringLiteral("OPEN")},
+        {QStringLiteral("message"), QStringLiteral("Non-EV vehicle detected")}
+    });
+
+    messages.append(QJsonObject{
+        {QStringLiteral("event_type"), QStringLiteral("OVERTIME_VIOLATION")},
+        {QStringLiteral("slot_id"), QStringLiteral("EV-02")},
+        {QStringLiteral("alarm_state"), QStringLiteral("OPEN")},
+        {QStringLiteral("message"), QStringLiteral("Overtime charging duration exceeded")}
+    });
+
+    messages.append(QJsonObject{
+        {QStringLiteral("event_type"), QStringLiteral("FIRE_SUSPECTED")},
+        {QStringLiteral("event_id"), QStringLiteral("mock-ev-1")},
+        {QStringLiteral("alarm_id"), QStringLiteral("mock-al-1")},
+        {QStringLiteral("channel_id"), QStringLiteral("CH2")},
+        {QStringLiteral("alarm_kind"), QStringLiteral("FIRE_SUSPECTED")},
+        {QStringLiteral("alarm_state"), QStringLiteral("OPEN")},
+        {QStringLiteral("active"), true}
+    });
+
+    messages.append(QJsonObject{
+        {QStringLiteral("event_type"), QStringLiteral("SENSOR_ERROR")},
+        {QStringLiteral("slot_id"), QStringLiteral("P-03")},
+        {QStringLiteral("alarm_state"), QStringLiteral("OPEN")}
+    });
+
+    messages.append(QJsonObject{
+        {QStringLiteral("event_type"), QStringLiteral("CAMERA_DISCONNECTED")},
+        {QStringLiteral("channel_id"), QStringLiteral("CH1")},
+        {QStringLiteral("message"), QStringLiteral("RTSP stream disconnected")},
+        {QStringLiteral("alarm_state"), QStringLiteral("OPEN")}
+    });
+
+    messages.append(QJsonObject{
+        {QStringLiteral("event_type"), QStringLiteral("OCR_REQUESTED")},
+        {QStringLiteral("slot_id"), QStringLiteral("EV-03")},
+        {QStringLiteral("correlation_id"), QStringLiteral("track-123")}
+    });
+
+    messages.append(QJsonObject{
+        {QStringLiteral("event_type"), QStringLiteral("VEHICLE_CLASSIFIED")},
+        {QStringLiteral("slot_id"), QStringLiteral("EV-03")},
+        {QStringLiteral("correlation_id"), QStringLiteral("track-123")},
+        {QStringLiteral("plate_number"), QStringLiteral("12가3456")},
+        {QStringLiteral("vehicle_classification"), QStringLiteral("ELECTRIC")}
+    });
+
+    return messages;
 }

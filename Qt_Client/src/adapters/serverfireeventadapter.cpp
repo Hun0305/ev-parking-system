@@ -1,7 +1,10 @@
 #include "serverfireeventadapter.h"
 
+#include <QJsonDocument>
 #include <QJsonValue>
 #include <QRegularExpression>
+
+#include <cmath>
 
 namespace {
 QString upperString(const QJsonObject &object, const QString &key)
@@ -30,7 +33,9 @@ ServerFireEvent invalidEvent(ServerFireEvent event, const QString &message)
 ServerFireEvent ServerFireEventAdapter::parse(const QJsonObject &object)
 {
     ServerFireEvent event;
+    event.canonicalPayload = QJsonDocument(object).toJson(QJsonDocument::Compact);
     event.eventId = object.value(QStringLiteral("event_id")).toString().trimmed();
+    event.deliveryId = object.value(QStringLiteral("delivery_id")).toString().trimmed();
     event.alarmId = object.value(QStringLiteral("alarm_id")).toString().trimmed();
     event.eventType = upperString(object, QStringLiteral("event_type"));
     event.channelId = normalizeChannelId(
@@ -70,6 +75,36 @@ ServerFireEvent ServerFireEventAdapter::parse(const QJsonObject &object)
     if (!suspectedType && !clearedType && !acknowledgedType
         && !alarmKindFire && !compatibilityAlarmFire) {
         return event;
+    }
+
+    const bool revisionFieldPresent = object.contains(QStringLiteral("fire_revision"));
+    const bool deliveryFieldPresent = object.contains(QStringLiteral("delivery_id"));
+    if (revisionFieldPresent || deliveryFieldPresent) {
+        const QJsonValue revisionValue =
+            object.value(QStringLiteral("fire_revision"));
+        const double rawRevision = revisionValue.toDouble(-1.0);
+        constexpr double kMaximumExactJsonInteger = 9007199254740991.0;
+        if (!revisionValue.isDouble() || !std::isfinite(rawRevision)
+            || rawRevision < 1.0 || rawRevision > kMaximumExactJsonInteger
+            || std::floor(rawRevision) != rawRevision) {
+            return invalidEvent(
+                event,
+                QStringLiteral("fire_revision must be a positive exact JSON integer"));
+        }
+        if (!deliveryFieldPresent || event.deliveryId.isEmpty()) {
+            return invalidEvent(
+                event, QStringLiteral("revisioned fire payload requires delivery_id"));
+        }
+        if (event.eventId.isEmpty()) {
+            return invalidEvent(
+                event, QStringLiteral("revisioned fire payload requires event_id"));
+        }
+        if (event.alarmId.isEmpty()) {
+            return invalidEvent(
+                event, QStringLiteral("revisioned fire payload requires alarm_id"));
+        }
+        event.fireRevisionPresent = true;
+        event.fireRevision = static_cast<quint64>(rawRevision);
     }
 
     if (event.channelId.isEmpty()) {

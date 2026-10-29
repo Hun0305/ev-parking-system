@@ -36,7 +36,7 @@ int main(int argc, char **argv)
     simulation.triggerSensorError();
     if (controller.slotState(QStringLiteral("P-03")) != SlotState::SensorError) return 11;
 
-    simulation.applyManualMessage(QStringLiteral("PARKING_SLOT,P04,OCCUPIED"));
+    simulation.applyManualMessage(QStringLiteral("{\"event_type\": \"SLOT_OCCUPIED\", \"slot_id\": \"P-04\", \"parking_state\": \"OCCUPIED\"}"));
     if (controller.slotState(QStringLiteral("P-04")) != SlotState::Occupied) return 12;
 
     simulation.runSampleMessages();

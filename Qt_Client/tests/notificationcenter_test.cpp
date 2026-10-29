@@ -46,6 +46,8 @@ int main(int argc, char *argv[])
     if (center.notifications().size() != 1 || changeCount != 1) return 2;
     if (center.notifications().constFirst().severity != QStringLiteral("WARNING")) return 3;
     if (center.notifications().constFirst().title != QStringLiteral("Hall sensor error")) return 4;
+    if (center.notifications().constFirst().eventId
+        != QStringLiteral("P-03-HALL_SENSOR_ERROR")) return 45;
     if (center.unreadCount() != 1) return 5;
 
     center.ingestEvent(makeEvent(QStringLiteral("P-03"),

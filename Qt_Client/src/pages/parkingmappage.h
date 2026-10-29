@@ -25,6 +25,7 @@ class QPushButton;
 class QResizeEvent;
 class QShowEvent;
 class QSlider;
+class QSpinBox;
 class QTableWidget;
 class QTimer;
 
@@ -73,6 +74,7 @@ private:
     };
 
     void loadLayout();
+    void showHelpDialog();
     LayoutSnapshot captureLayoutSnapshot() const;
     void pushUndoSnapshot(const LayoutSnapshot &snapshot);
     void pushCurrentLayoutToUndoHistory();
@@ -168,6 +170,8 @@ private:
     QCheckBox *m_enabledCheck = nullptr;
     QDoubleSpinBox *m_xSpin = nullptr;
     QDoubleSpinBox *m_ySpin = nullptr;
+    QSpinBox *m_widthSpin = nullptr;
+    QSpinBox *m_heightSpin = nullptr;
     QSlider *m_widthSlider = nullptr;
     QSlider *m_heightSlider = nullptr;
     QSlider *m_rotationSlider = nullptr;

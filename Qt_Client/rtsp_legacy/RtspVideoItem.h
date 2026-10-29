@@ -40,6 +40,7 @@ public:
     qint64 frameTimestampMs() const;
     qint64 frameWallClockMs() const;
     QString frameClockText() const;
+    QImage currentFrame() const;
 
     void paint(QPainter *painter) override;
 

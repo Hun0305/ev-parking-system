@@ -8,11 +8,14 @@
 #include "pages/evidencepage.h"
 #include "pages/eventspage.h"
 #include "pages/imagecomparepage.h"
+#include "pages/ivasettingspage.h"
 #include "pages/parkingmappage.h"
+#include "pages/parkingroisettingspage.h"
 #include "pages/settingspage.h"
 #include "services/camerasettings.h"
 #include "services/notificationcenter.h"
 #include "simulation/parkingsimulationservice.h"
+#include "iva/wiseaiconfigclient.h"
 
 
 #include <QButtonGroup>
@@ -62,6 +65,14 @@ MainWindow::MainWindow(QWidget *parent)
 {
     m_diagnosticsService = new DiagnosticsService(this);
     buildUi();
+    WiseAiConnectionOptions wiseAiOptions;
+    wiseAiOptions.baseUrl = QUrl(QStringLiteral("https://%1")
+                                     .arg(m_cameraSettings.cameraIp()));
+    wiseAiOptions.username = m_cameraSettings.cameraUsername();
+    wiseAiOptions.password = m_cameraSettings.cameraPassword();
+    wiseAiOptions.pinnedCertificateSha256 =
+        m_cameraSettings.httpsCertificateSha256();
+    m_wiseAiConfigClient = new WiseAiConfigClient(wiseAiOptions, this);
     m_parkingController = new ParkingController(clientConfigPath(), clientLocalConfigPath(), this);
     m_parkingSimulationService = new ParkingSimulationService(m_parkingController, this);
     connectPages();
@@ -138,7 +149,9 @@ void MainWindow::buildUi()
     m_imageCompareNavButton = addNavButton(
         QStringLiteral("Image Compare"), 4);
     addNavButton(QStringLiteral("Settings"), 5);
-    addNavButton(QStringLiteral("Debug"), 6);
+    addNavButton(QStringLiteral("IVA Setup"), 6);
+    addNavButton(QStringLiteral("Parking ROI"), 7);
+    addNavButton(QStringLiteral("Debug"), 8);
     connect(m_evidenceNavButton, &QPushButton::clicked, this, [this]() {
         if (m_evidencePage) {
             m_evidencePage->requestCurrentEvidence();
@@ -200,7 +213,13 @@ void MainWindow::buildUi()
     m_eventsPage = new EventsPage(m_pages);
     m_evidencePage = new EvidencePage(m_pages);
     m_imageComparePage = new ImageComparePage(m_pages);
-    m_settingsPage = new SettingsPage(m_cameraSettings.configPath(), m_cameraSettings.cameraIp(), m_pages);
+    m_settingsPage = new SettingsPage(m_cameraSettings.configPath(),
+                                      m_cameraSettings.cameraIp(),
+                                      m_pages,
+                                      m_cameraSettings.cameraUsername(),
+                                      m_cameraSettings.cameraPassword());
+    m_ivaSettingsPage = new IvaSettingsPage(m_cameraSettings.cameraIp(), m_pages);
+    m_parkingRoiSettingsPage = new ParkingRoiSettingsPage(m_pages);
     m_debugPage = new DebugPage(m_pages);
     m_pages->addWidget(m_dashboardPage);
     m_pages->addWidget(m_parkingMapPage);
@@ -208,6 +227,8 @@ void MainWindow::buildUi()
     m_pages->addWidget(m_evidencePage);
     m_pages->addWidget(m_imageComparePage);
     m_pages->addWidget(m_settingsPage);
+    m_pages->addWidget(m_ivaSettingsPage);
+    m_pages->addWidget(m_parkingRoiSettingsPage);
     m_pages->addWidget(m_debugPage);
     contentLayout->addWidget(m_pages, 1);
     rootLayout->addWidget(sidebar);
@@ -269,8 +290,10 @@ void MainWindow::connectPages()
             m_diagnosticsService, &DiagnosticsService::setApiState);
     connect(m_dashboardPage, &DashboardPage::rtspDiagnosticsChanged,
             m_diagnosticsService, &DiagnosticsService::setRtspChannels);
-    connect(m_dashboardPage, &DashboardPage::evidenceRequested, this,
-            [this](const QString &sourceId) { showEvidencePage(sourceId); });
+    connect(m_dashboardPage, &DashboardPage::eventEvidenceRequested, this,
+            [this](const QString &eventId) {
+                showEventEvidencePage(eventId);
+            });
     connect(m_parkingSimulationService, &ParkingSimulationService::simulationApplied,
             m_diagnosticsService, &DiagnosticsService::markSimulationApplied);
     connect(m_diagnosticsService, &DiagnosticsService::apiStateChanged,
@@ -322,6 +345,29 @@ void MainWindow::connectPages()
                     m_imageComparePage->showError(slotId, message);
                 }
             });
+    connect(m_parkingController, &ParkingController::eventEvidenceReady,
+            this,
+            [this](const QString &eventId, const QString &slotId,
+                   qint64 sessionId, SlotState state,
+                   const QString &plateNumber,
+                   const QList<ParkingImageResource> &images) {
+                m_evidencePage->setImageLoader(
+                    m_parkingController->imageLoader());
+                m_evidencePage->showEventEvidence(
+                    eventId, slotId, sessionId, state, plateNumber, images);
+            });
+    connect(m_parkingController, &ParkingController::eventEvidenceFailed,
+            this,
+            [this](const QString &eventId, const QString &slotId,
+                   const QString &message) {
+                m_evidencePage->showEventError(eventId, slotId, message);
+                m_alertBanner->setText(
+                    QStringLiteral("Event evidence unavailable: %1")
+                        .arg(message));
+                m_alertBanner->setStyleSheet(QStringLiteral(
+                    "background:#fff3e0;color:#e65100;border:1px solid #ffb74d;"
+                    "border-radius:4px;font-weight:800;"));
+            });
     connect(m_parkingController, &ParkingController::detailError, this,
             [this](const QString &message) {
                 if (m_pages->currentWidget() == m_evidencePage) {
@@ -330,11 +376,13 @@ void MainWindow::connectPages()
                     m_imageComparePage->showError(QString(), message);
                 }
             });
-    connect(m_evidencePage, &EvidencePage::evidenceRequested, this,
+    connect(m_evidencePage, &EvidencePage::slotEvidenceRequested, this,
             [this](const QString &slotId) {
                 m_evidencePage->setImageLoader(m_parkingController->imageLoader());
                 m_parkingController->requestSlotDetail(slotId);
             });
+    connect(m_evidencePage, &EvidencePage::eventEvidenceRequested,
+            m_parkingController, &ParkingController::requestEventEvidence);
     connect(m_imageComparePage, &ImageComparePage::comparisonRequested, this,
             [this](const QString &slotId) {
                 m_imageComparePage->setImageLoader(
@@ -366,22 +414,96 @@ void MainWindow::connectPages()
                     success ? QStringLiteral("EXPORT_CSV") : QStringLiteral("EXPORT_ERROR"),
                     message, success ? QStringLiteral("DONE") : QStringLiteral("FAILED"));
             });
-    connect(m_eventsPage, &EventsPage::evidenceRequested, this,
-            [this](const QString &sourceId) { showEvidencePage(sourceId); });
-    connect(m_settingsPage, &SettingsPage::saveCameraIpRequested,
-            this, &MainWindow::saveCameraIp);
+    connect(m_eventsPage, &EventsPage::eventEvidenceRequested, this,
+            [this](const QString &eventId) {
+                showEventEvidencePage(eventId);
+            });
+    connect(m_settingsPage, &SettingsPage::saveCameraCredentialsRequested,
+            this, &MainWindow::saveCameraCredentials);
     connect(m_settingsPage, &SettingsPage::saveServerBaseUrlRequested,
             m_parkingController, &ParkingController::updateServerBaseUrl);
     connect(m_settingsPage, &SettingsPage::reconnectServerRequested,
             m_parkingController, &ParkingController::reconnectNow);
+    connect(m_settingsPage, &SettingsPage::overstayThresholdRefreshRequested,
+            m_parkingController, &ParkingController::requestOverstayThreshold);
+    connect(m_settingsPage, &SettingsPage::overstayThresholdUpdateRequested,
+            m_parkingController, &ParkingController::updateOverstayThreshold);
     connect(m_parkingController, &ParkingController::serverBaseUrlChanged,
             m_settingsPage, &SettingsPage::setServerBaseUrl);
     connect(m_parkingController, &ParkingController::serverConnectionChanged,
             m_settingsPage, &SettingsPage::setServerConnectionStatus);
+    connect(m_parkingController,
+            &ParkingController::overstayThresholdRequestStarted,
+            m_settingsPage, &SettingsPage::setOverstayThresholdRequestStarted);
+    connect(m_parkingController, &ParkingController::overstayThresholdReceived,
+            m_settingsPage, &SettingsPage::setOverstayThreshold);
+    connect(m_parkingController,
+            &ParkingController::overstayThresholdRequestFailed,
+            m_settingsPage, &SettingsPage::setOverstayThresholdError);
     connect(m_parkingController, &ParkingController::serverConfigurationError, this,
             [this](const QString &message) {
                 QMessageBox::warning(this, QStringLiteral("Server API"), message);
             });
+    connect(m_ivaSettingsPage, &IvaSettingsPage::refreshRequested,
+            m_wiseAiConfigClient, &WiseAiConfigClient::fetchConfiguration);
+    connect(m_ivaSettingsPage, &IvaSettingsPage::applyRequested,
+            m_wiseAiConfigClient,
+            &WiseAiConfigClient::applyChannelConfiguration);
+    connect(m_ivaSettingsPage, &IvaSettingsPage::deleteAreaRequested,
+            m_wiseAiConfigClient, &WiseAiConfigClient::deleteArea);
+    connect(m_wiseAiConfigClient, &WiseAiConfigClient::optionsReceived,
+            m_ivaSettingsPage, &IvaSettingsPage::setOptions);
+    connect(m_wiseAiConfigClient, &WiseAiConfigClient::capabilitiesReceived,
+            m_ivaSettingsPage, &IvaSettingsPage::setCapabilities);
+    connect(m_wiseAiConfigClient, &WiseAiConfigClient::configurationReceived,
+            m_ivaSettingsPage, &IvaSettingsPage::setConfiguration);
+    connect(m_wiseAiConfigClient, &WiseAiConfigClient::certificatePinned,
+            this, [this](const QString &sha256) {
+                QString errorMsg;
+                m_cameraSettings.saveHttpsCertificateSha256(sha256, errorMsg);
+            });
+    connect(m_wiseAiConfigClient, &WiseAiConfigClient::requestFailed,
+            m_ivaSettingsPage, &IvaSettingsPage::setRequestError);
+    connect(m_wiseAiConfigClient, &WiseAiConfigClient::applyStarted,
+            m_ivaSettingsPage, &IvaSettingsPage::setApplyStarted);
+    connect(m_wiseAiConfigClient, &WiseAiConfigClient::applySucceeded,
+            m_ivaSettingsPage, &IvaSettingsPage::setApplySuccess);
+    connect(m_wiseAiConfigClient, &WiseAiConfigClient::applyFailed,
+            m_ivaSettingsPage, &IvaSettingsPage::setApplyError);
+    connect(m_ivaSettingsPage, &IvaSettingsPage::previewFrameRequested,
+            this, [this](int channel) {
+        if (!m_dashboardPage || !m_ivaSettingsPage) return;
+        m_ivaSettingsPage->setPreviewFrame(
+            channel, m_dashboardPage->currentRtspFrame(channel));
+    });
+    connect(m_ivaSettingsPage, &IvaSettingsPage::piRoiSaveRequested,
+            m_parkingController, &ParkingController::updateParkingRoi);
+    connect(m_parkingController, &ParkingController::parkingRoiReceived,
+            m_ivaSettingsPage, &IvaSettingsPage::setPiRoiResult);
+    connect(m_parkingController, &ParkingController::parkingRoiRequestFailed,
+            m_ivaSettingsPage, &IvaSettingsPage::setPiRoiError);
+    connect(m_parkingRoiSettingsPage,
+            &ParkingRoiSettingsPage::roiListRequested,
+            m_parkingController, &ParkingController::requestParkingRois);
+    connect(m_parkingRoiSettingsPage,
+            &ParkingRoiSettingsPage::roiRequested,
+            m_parkingController, &ParkingController::requestParkingRoi);
+    connect(m_parkingRoiSettingsPage,
+            &ParkingRoiSettingsPage::roiSaveRequested,
+            m_parkingController, &ParkingController::updateParkingRoi);
+    connect(m_parkingController, &ParkingController::parkingRoiListReceived,
+            m_parkingRoiSettingsPage, &ParkingRoiSettingsPage::setRoiList);
+    connect(m_parkingController, &ParkingController::parkingRoiReceived,
+            m_parkingRoiSettingsPage, &ParkingRoiSettingsPage::setRoi);
+    connect(m_parkingController, &ParkingController::parkingRoiRequestFailed,
+            m_parkingRoiSettingsPage, &ParkingRoiSettingsPage::setRequestError);
+    connect(m_parkingRoiSettingsPage,
+            &ParkingRoiSettingsPage::previewFrameRequested,
+            this, [this]() {
+        if (!m_dashboardPage || !m_parkingRoiSettingsPage) return;
+        m_parkingRoiSettingsPage->setPreviewFrame(
+            m_dashboardPage->currentRtspFrame(0));
+    });
 }
 
 void MainWindow::showFireAlarmPopup(const QString &channelId,
@@ -590,7 +712,9 @@ void MainWindow::showNotificationPopup()
                     if (index < 0 || index >= notifications.size()) return;
                     const NotificationRecord &notification = notifications.at(index);
                     detailLabel->setText(formatNotificationDetail(notification));
-                    const bool available = isEvidenceSlot(notification.sourceId);
+                    const bool available = m_parkingController
+                        && m_parkingController->hasEventEvidence(
+                            notification.eventId);
                     evidenceButton->setEnabled(available);
                     evidenceButton->setToolTip(
                         available
@@ -625,9 +749,9 @@ void MainWindow::showNotificationPopup()
                 if (!item) return;
                 const int index = item->data(Qt::UserRole).toInt();
                 if (index < 0 || index >= notifications.size()) return;
-                const QString sourceId = notifications.at(index).sourceId;
+                const QString eventId = notifications.at(index).eventId;
                 popup->close();
-                showEvidencePage(sourceId);
+                showEventEvidencePage(eventId);
             });
     connect(closeButton, &QPushButton::clicked, popup, &QFrame::close);
 
@@ -653,29 +777,29 @@ void MainWindow::showEventsPage()
     }
 }
 
-bool MainWindow::isEvidenceSlot(const QString &sourceId) const
+bool MainWindow::showEventEvidencePage(const QString &rawEventId)
 {
-    if (!m_parkingController) {
+    const QString eventId = rawEventId.trimmed();
+    if (!m_pages || !m_evidencePage || !m_parkingController
+        || eventId.isEmpty()) {
         return false;
     }
-    const QString slotId = normalizeParkingSlotId(sourceId);
-    const ParkingViewState &state = m_parkingController->state();
-    return state.evSlots.contains(slotId) || state.parkingSlots.contains(slotId);
-}
-
-bool MainWindow::showEvidencePage(const QString &sourceId)
-{
-    if (!m_pages || !m_evidencePage || !isEvidenceSlot(sourceId)) {
+    if (!m_parkingController->hasEventEvidence(eventId)) {
+        m_alertBanner->setText(
+            QStringLiteral("Event %1 is not linked to parking evidence.")
+                .arg(eventId));
+        m_alertBanner->setStyleSheet(QStringLiteral(
+            "background:#fff3e0;color:#e65100;border:1px solid #ffb74d;"
+            "border-radius:4px;font-weight:800;"));
         return false;
     }
-    const QString slotId = normalizeParkingSlotId(sourceId);
-    if (!m_evidencePage->selectSlot(slotId)) {
-        return false;
-    }
+    const QString slotId = m_parkingController->eventEvidenceSlotId(eventId);
+    m_evidencePage->openEvent(eventId, slotId);
     m_pages->setCurrentWidget(m_evidencePage);
     if (m_evidenceNavButton) {
         m_evidenceNavButton->setChecked(true);
     }
+    m_parkingController->requestEventEvidence(eventId);
     return true;
 }
 
@@ -723,19 +847,33 @@ QString MainWindow::parkingMapLayoutPath() const
 #endif
 }
 
-void MainWindow::saveCameraIp(const QString &cameraIpText)
+void MainWindow::saveCameraCredentials(const QString &cameraIpText,
+                                       const QString &username,
+                                       const QString &password)
 {
     QString newIp;
     QString errorMessage;
-    if (!m_cameraSettings.saveCameraIp(cameraIpText, newIp, errorMessage)) {
-        QMessageBox::warning(this, QStringLiteral("Camera IP"), errorMessage);
+    if (!m_cameraSettings.saveCameraCredentials(cameraIpText, username, password,
+                                                newIp, errorMessage)) {
+        QMessageBox::warning(this, QStringLiteral("Camera settings"), errorMessage);
         return;
     }
     m_settingsPage->setCameraIp(newIp);
+    m_settingsPage->setCameraCredentials(username.trimmed(), password);
+    m_ivaSettingsPage->setCameraIp(newIp);
+    WiseAiConnectionOptions wiseAiOptions;
+    wiseAiOptions.baseUrl = QUrl(QStringLiteral("https://%1").arg(newIp));
+    wiseAiOptions.username = m_cameraSettings.cameraUsername();
+    wiseAiOptions.password = m_cameraSettings.cameraPassword();
+    wiseAiOptions.pinnedCertificateSha256 =
+        m_cameraSettings.httpsCertificateSha256();
+    m_wiseAiConfigClient->setConnectionOptions(wiseAiOptions);
     m_dashboardPage->setRtspUrls(
         m_cameraSettings.rtspUrls(QStringLiteral("profile3")),
         m_cameraSettings.rtspUrls(QStringLiteral("profile2")));
+    m_wiseAiConfigClient->fetchConfiguration();
     m_parkingController->recordEvent(
-        QStringLiteral("SYSTEM"), QStringLiteral("CAMERA_IP_UPDATED"),
-        QStringLiteral("Camera IP changed to ") + newIp, QStringLiteral("DONE"));
+        QStringLiteral("SYSTEM"), QStringLiteral("CAMERA_SETTINGS_UPDATED"),
+        QStringLiteral("Camera connection settings updated for ") + newIp,
+        QStringLiteral("DONE"));
 }

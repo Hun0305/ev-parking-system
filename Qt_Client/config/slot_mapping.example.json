@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "description": "Pi server slot_id to Qt zoneId mapping. Copy this file to slot_mapping.local.json and edit to match your deployment.",
+    "mappings": [
+        { "server_slot_id": "EV01", "zone_id": "EV-01" },
+        { "server_slot_id": "EV02", "zone_id": "EV-02" },
+        { "server_slot_id": "EV03", "zone_id": "EV-03" },
+        { "server_slot_id": "EV04", "zone_id": "EV-04" },
+        { "server_slot_id": "P01",  "zone_id": "P-01" },
+        { "server_slot_id": "P02",  "zone_id": "P-02" },
+        { "server_slot_id": "P03",  "zone_id": "P-03" },
+        { "server_slot_id": "P04",  "zone_id": "P-04" }
+    ]
+}

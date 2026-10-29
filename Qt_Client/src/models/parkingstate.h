@@ -36,11 +36,20 @@ enum class SlotAlarmKind {
     SensorError
 };
 
+enum class OcrStatus {
+    None,
+    Requested,
+    Completed,
+    Unrecognized
+};
+
 struct SlotVisualState {
     SlotOccupancy occupancy = SlotOccupancy::Unknown;
     VehicleClass vehicleClass = VehicleClass::Unknown;
     SlotAlarmKind alarm = SlotAlarmKind::None;
     bool alarmAcknowledged = false;
+    OcrStatus ocrStatus = OcrStatus::None;
+    QString correlationId;
 };
 
 struct EvSlotInfo {
@@ -50,12 +59,16 @@ struct EvSlotInfo {
     QString occupiedTime;
     SlotState state = SlotState::Vacant;
     QString alarmText;
+    QString correlationId;
+    OcrStatus ocrStatus = OcrStatus::None;
     SlotVisualState visual;
 };
 
 struct ParkingSlotInfo {
     QString slotId;
     SlotState state = SlotState::Vacant;
+    QString correlationId;
+    OcrStatus ocrStatus = OcrStatus::None;
     SlotVisualState visual;
 };
 
@@ -83,7 +96,9 @@ QString slotStateStyle(SlotState state);
 SlotState slotStateFromText(const QString &text);
 SlotAlarmKind slotAlarmKindFromText(const QString &text, SlotState fallbackState = SlotState::Vacant);
 SlotVisualState deriveSlotVisualState(SlotState state, bool vehicleTypeKnown,
-                                      bool isEv, const QString &alarmText = QString());
+                                      bool isEv, const QString &alarmText = QString(),
+                                      OcrStatus ocrStatus = OcrStatus::None,
+                                      const QString &correlationId = QString());
 QString slotAlarmText(SlotAlarmKind alarm);
 QString vehicleClassText(VehicleClass vehicleClass);
 QString normalizeParkingSlotId(const QString &rawSlotId);
