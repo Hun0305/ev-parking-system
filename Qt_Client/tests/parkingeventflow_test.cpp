@@ -76,11 +76,14 @@ int main(int argc, char **argv)
 
     controller.applyManualJsonMessage(QJsonObject{
         {QStringLiteral("event_type"), QStringLiteral("SLOT_OCCUPIED")},
-        {QStringLiteral("slot_id"), QStringLiteral("P-04")},
+        {QStringLiteral("slot_id"), QStringLiteral("P01")},
+        {QStringLiteral("plate_number"), QStringLiteral("34C5678")},
         {QStringLiteral("parking_state"), QStringLiteral("OCCUPIED")}
     });
-    if (controller.slotState(QStringLiteral("P-04")) != SlotState::Occupied) return 9;
-    if (events.constLast().sourceId != QStringLiteral("P-04")) return 10;
+    if (controller.slotState(QStringLiteral("P-01")) != SlotState::Occupied) return 9;
+    if (controller.plateNumber(QStringLiteral("P-01"))
+        != QStringLiteral("34C5678")) return 129;
+    if (events.constLast().sourceId != QStringLiteral("P-01")) return 10;
     if (events.constLast().eventType != QStringLiteral("SLOT_OCCUPIED")) return 11;
 
     controller.applyManualJsonMessage(QJsonObject{
@@ -344,10 +347,14 @@ int main(int argc, char **argv)
     if (controller.state().evSlots.size() != 1) return 71;
     if (!controller.state().parkingSlots.isEmpty()) return 72;
     if (controller.state().evSlots.contains(QStringLiteral("EV-02"))) return 73;
+    if (!controller.state().hasServerSnapshot
+        || controller.state().serverSlotCount != 1) return 74;
     const EvSlotInfo snapshotSlot =
         controller.state().evSlots.value(QStringLiteral("EV-01"));
-    if (snapshotSlot.visual.occupancy != SlotOccupancy::Occupied) return 74;
-    if (snapshotSlot.visual.vehicleClass != VehicleClass::Electric) return 75;
+    if (snapshotSlot.visual.occupancy != SlotOccupancy::Occupied) return 75;
+    if (snapshotSlot.visual.vehicleClass != VehicleClass::Electric) return 76;
+    controller.applyParkingSlotUpdate(QStringLiteral("P-99"), SlotState::Vacant);
+    if (controller.state().serverSlotCount != 1) return 77;
 
     const QByteArray systemErrorPayload = R"JSON({
         "event_id": "system-uart-disconnected",

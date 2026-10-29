@@ -7,6 +7,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRegularExpression>
+#include <QSet>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
@@ -20,6 +21,13 @@ int main(int argc, char **argv)
     if (!server.listen(QHostAddress::LocalHost, 0)) return 1;
 
     ParkingRoi stored{0.1, 0.2, 0.3, 0.4};
+    QHash<QString, ParkingRoi> storedGeneral;
+    for (int slotNumber = 1; slotNumber <= 4; ++slotNumber) {
+        storedGeneral.insert(
+            QStringLiteral("P%1").arg(slotNumber, 2, 10, QLatin1Char('0')),
+            ParkingRoi{0.15, 0.25, 0.35, 0.45});
+    }
+    QSet<QString> generalPutSlots;
     int putCount = 0;
     QObject::connect(&server, &QTcpServer::newConnection, &app, [&]() {
         QTcpSocket *socket = server.nextPendingConnection();
@@ -85,8 +93,48 @@ int main(int argc, char **argv)
                 status = 404;
                 responseBody = QByteArrayLiteral("{\"error\":\"slot not found\"}");
             } else {
-                status = 404;
-                responseBody = QByteArrayLiteral("{\"error\":\"unexpected path\"}");
+                const QString requestText = QString::fromLatin1(requestLine);
+                const QRegularExpressionMatch generalGet = QRegularExpression(
+                    QStringLiteral("^GET /api/v1/settings/parking-slots/(P0[1-4])/roi "))
+                        .match(requestText);
+                const QRegularExpressionMatch generalPut = QRegularExpression(
+                    QStringLiteral("^PUT /api/v1/settings/parking-slots/(P0[1-4])/roi "))
+                        .match(requestText);
+                if (generalGet.hasMatch()) {
+                    const QString serverSlotId = generalGet.captured(1);
+                    responseBody = QJsonDocument(QJsonObject{
+                        {QStringLiteral("slotId"), serverSlotId},
+                        {QStringLiteral("roi"), ParkingRoiCodec::toJson(
+                             storedGeneral.value(serverSlotId))}})
+                                       .toJson(QJsonDocument::Compact);
+                } else if (generalPut.hasMatch()) {
+                    const QString serverSlotId = generalPut.captured(1);
+                    ++putCount;
+                    generalPutSlots.insert(serverSlotId);
+                    const QJsonDocument body = QJsonDocument::fromJson(
+                        buffer->mid(headerEnd + 4, contentLength));
+                    if (!body.isObject()) {
+                        status = 400;
+                        responseBody = QByteArrayLiteral("{\"error\":\"invalid JSON\"}");
+                    } else {
+                        const QJsonObject object = body.object();
+                        const ParkingRoi requested{
+                            object.value(QStringLiteral("x")).toDouble(),
+                            object.value(QStringLiteral("y")).toDouble(),
+                            object.value(QStringLiteral("width")).toDouble(),
+                            object.value(QStringLiteral("height")).toDouble()};
+                        storedGeneral.insert(serverSlotId, requested);
+                        responseBody = QJsonDocument(QJsonObject{
+                            {QStringLiteral("success"), true},
+                            {QStringLiteral("slotId"), serverSlotId},
+                            {QStringLiteral("appliedImmediately"), true},
+                            {QStringLiteral("roi"), ParkingRoiCodec::toJson(requested)}})
+                                           .toJson(QJsonDocument::Compact);
+                    }
+                } else {
+                    status = 404;
+                    responseBody = QByteArrayLiteral("{\"error\":\"unexpected path\"}");
+                }
             }
 
             const QByteArray reason = status >= 400 ? "Error" : "OK";
@@ -130,9 +178,22 @@ int main(int argc, char **argv)
     QFile mapping(directory.filePath(QStringLiteral("slot_mapping.local.json")));
     if (!mapping.open(QIODevice::WriteOnly | QIODevice::Text)) return 4;
     mapping.write(QJsonDocument(QJsonObject{
-        {QStringLiteral("mappings"), QJsonArray{QJsonObject{
-            {QStringLiteral("server_slot_id"), QStringLiteral("slot_01")},
-            {QStringLiteral("zone_id"), QStringLiteral("EV-01")}}}}})
+        {QStringLiteral("mappings"), QJsonArray{
+            QJsonObject{
+                {QStringLiteral("server_slot_id"), QStringLiteral("slot_01")},
+                {QStringLiteral("zone_id"), QStringLiteral("EV-01")}},
+            QJsonObject{
+                {QStringLiteral("server_slot_id"), QStringLiteral("P01")},
+                {QStringLiteral("zone_id"), QStringLiteral("P-01")}},
+            QJsonObject{
+                {QStringLiteral("server_slot_id"), QStringLiteral("P02")},
+                {QStringLiteral("zone_id"), QStringLiteral("P-02")}},
+            QJsonObject{
+                {QStringLiteral("server_slot_id"), QStringLiteral("P03")},
+                {QStringLiteral("zone_id"), QStringLiteral("P-03")}},
+            QJsonObject{
+                {QStringLiteral("server_slot_id"), QStringLiteral("P04")},
+                {QStringLiteral("zone_id"), QStringLiteral("P-04")}}}}})
                       .toJson(QJsonDocument::Compact));
     mapping.close();
 
@@ -144,6 +205,7 @@ int main(int argc, char **argv)
     bool saveVerified = false;
     bool mismatchRejected = false;
     bool notFoundReceived = false;
+    QStringList verifiedGeneralSlots;
     QObject::connect(&controller, &ParkingController::serverConnectionChanged,
                      &app, [&](const QString &, bool connected) {
         if (connected && !started) {
@@ -164,6 +226,33 @@ int main(int argc, char **argv)
                      &app, [&](const QString &slotId, const ParkingRoi &roi,
                                quint64 generation, bool afterSave,
                                bool appliedImmediately) {
+        if (generation >= 7 && generation <= 10 && afterSave) {
+            const int slotNumber = static_cast<int>(generation - 6);
+            const QString expectedZoneId = QStringLiteral("P-%1").arg(
+                slotNumber, 2, 10, QLatin1Char('0'));
+            if (slotId != expectedZoneId || !appliedImmediately
+                || !roi.nearlyEquals(ParkingRoi{0.15, 0.25, 0.35, 0.45})) {
+                app.exit(8);
+                return;
+            }
+            verifiedGeneralSlots.append(slotId);
+            if (generation < 10) {
+                const QString nextZoneId = QStringLiteral("P-%1").arg(
+                    slotNumber + 1, 2, 10, QLatin1Char('0'));
+                controller.updateParkingRoi(
+                    nextZoneId, ParkingRoi{0.15, 0.25, 0.35, 0.45},
+                    generation + 1);
+                return;
+            }
+            app.exit(listReceived && singleReceived && saveVerified
+                         && mismatchRejected && notFoundReceived
+                         && verifiedGeneralSlots.size() == 4
+                         && generalPutSlots == QSet<QString>{
+                                QStringLiteral("P01"), QStringLiteral("P02"),
+                                QStringLiteral("P03"), QStringLiteral("P04")}
+                         && putCount == 6 ? 0 : 8);
+            return;
+        }
         if (slotId != QStringLiteral("EV-01")) {
             app.exit(6);
             return;
@@ -200,9 +289,9 @@ int main(int argc, char **argv)
         }
         if (generation == 6 && saveRequest
             && message.contains(QStringLiteral("Invalid ROI"))) {
-            app.exit(listReceived && singleReceived && saveVerified
-                         && mismatchRejected && notFoundReceived
-                         && putCount == 2 ? 0 : 8);
+            controller.updateParkingRoi(
+                QStringLiteral("P-01"),
+                ParkingRoi{0.15, 0.25, 0.35, 0.45}, 7);
             return;
         }
         app.exit(9);

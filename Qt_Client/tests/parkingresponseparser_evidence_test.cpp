@@ -15,7 +15,14 @@ int main(int argc, char **argv)
             "session_id": 7,
             "plate_number": "12A3456",
             "ev_status": "PHEV",
-            "entry_time": "2026-07-27T09:00:00+09:00"
+            "entry_time": "2026-07-27T09:00:00+09:00",
+            "images": [
+              {
+                "image_id": 1,
+                "url": "/api/v1/images/1/original",
+                "captured_at": "2026-07-27T09:00:00+09:00"
+              }
+            ]
           }
         }
     )JSON");
@@ -26,6 +33,7 @@ int main(int argc, char **argv)
     if (slot.sessionId != 7) return 3;
     if (slot.plateNumber != QStringLiteral("12A3456")) return 4;
     if (!slot.vehicleTypeKnown || !slot.isEv) return 5;
+    if (slot.images.size() != 1 || slot.images.constFirst().sessionId != 7) return 18;
 
     const QJsonDocument sessionImages = QJsonDocument::fromJson(R"JSON(
         {
@@ -43,7 +51,6 @@ int main(int argc, char **argv)
             },
             {
               "image_id": 10,
-              "session_id": 7,
               "original_url": "/api/v1/images/10/original",
               "enhanced_url": null,
               "evidence_reason": "OVERSTAY_EVIDENCE",
@@ -61,6 +68,7 @@ int main(int argc, char **argv)
     if (images.at(0).ocrResult != QStringLiteral("12A3456")) return 11;
     if (images.at(2).evidenceReason != QStringLiteral("OVERSTAY_EVIDENCE")) return 12;
     if (images.at(2).url != QUrl(QStringLiteral("/api/v1/images/10/original"))) return 13;
+    if (images.at(2).sessionId != 7) return 19;
 
     const QJsonDocument legacyTimeline = QJsonDocument::fromJson(R"JSON(
         {

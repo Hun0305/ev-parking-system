@@ -48,6 +48,9 @@ int main(int argc, char **argv)
     bool synchronizedSettingsPersisted = false;
     bool mqttClientIdGenerated = false;
     bool mqttClientIdStable = false;
+    int imageLoaderChangeCount = 0;
+    QObject::connect(&controller, &ParkingController::imageLoaderChanged,
+                     &app, [&](ImageLoader *) { ++imageLoaderChangeCount; });
     QObject::connect(&controller, &ParkingController::serverConnectionChanged,
                      &app, [&](const QString &status, bool) {
         if (status == QStringLiteral("Connecting...")) ++connectingCount;
@@ -55,7 +58,8 @@ int main(int argc, char **argv)
         if (retryScheduled && connectingCount >= 2
             && mqttFollowedNewApiHost && !staleMqttHostRetried
             && synchronizedSettingsPersisted
-            && mqttClientIdGenerated && mqttClientIdStable) {
+            && mqttClientIdGenerated && mqttClientIdStable
+            && imageLoaderChangeCount >= 2) {
             app.exit(0);
         }
     });
@@ -74,6 +78,7 @@ int main(int argc, char **argv)
                          && mqttFollowedNewApiHost && !staleMqttHostRetried
                          && synchronizedSettingsPersisted
                          && mqttClientIdGenerated && mqttClientIdStable
+                         && imageLoaderChangeCount >= 2
                      ? 0
                      : 1);
     });

@@ -19,6 +19,7 @@ int main(int argc, char **argv)
     if (!server.listen(QHostAddress::LocalHost, 0)) return 1;
 
     bool updateReceived = false;
+    bool authorizationMissing = false;
     int overstayGetCount = 0;
     int overstayPutCount = 0;
     QObject::connect(&server, &QTcpServer::newConnection, &app, [&]() {
@@ -30,6 +31,11 @@ int main(int argc, char **argv)
             const int headerEnd = buffer->indexOf("\r\n\r\n");
             if (headerEnd < 0) return;
             const QString headers = QString::fromLatin1(buffer->left(headerEnd));
+            if (!headers.contains(
+                    QStringLiteral("Authorization: Bearer controller-token"),
+                    Qt::CaseInsensitive)) {
+                authorizationMissing = true;
+            }
             const QRegularExpressionMatch lengthMatch = QRegularExpression(
                 QStringLiteral("Content-Length:\\s*(\\d+)"),
                 QRegularExpression::CaseInsensitiveOption).match(headers);
@@ -124,7 +130,7 @@ int main(int argc, char **argv)
     QTextStream stream(&config);
     stream << "[api]\n"
            << "enabled=true\n"
-           << "base_url=http://127.0.0.1:" << server.serverPort() << "\n"
+           << "base_url=http://127.0.0.1:1\n"
            << "slots_path=/slots\n"
            << "slot_detail_path=/slot/{slot_id}\n"
            << "session_images_path=/sessions/{session_id}/images\n"
@@ -139,6 +145,10 @@ int main(int argc, char **argv)
 
     ParkingController controller(
         sharedPath, directory.filePath(QStringLiteral("client_config.local.ini")));
+    const QUrl authenticatedOrigin(QStringLiteral("http://127.0.0.1:%1")
+                                       .arg(server.serverPort()));
+    controller.setBearerAuthentication(
+        authenticatedOrigin, QByteArrayLiteral("controller-token"));
     bool requestedInitialSetting = false;
     int rejectedFetchContracts = 0;
     bool rejectedUnappliedRuntime = false;
@@ -162,7 +172,8 @@ int main(int argc, char **argv)
         }
         if (afterUpdate && seconds == 1800 && updateReceived
             && overstayGetCount == 3 && overstayPutCount == 2
-            && rejectedFetchContracts == 2 && rejectedUnappliedRuntime) {
+            && rejectedFetchContracts == 2 && rejectedUnappliedRuntime
+            && !authorizationMissing) {
             completed = true;
             app.exit(0);
             return;

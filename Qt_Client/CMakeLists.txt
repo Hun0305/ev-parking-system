@@ -70,6 +70,9 @@ endif()
 
 add_executable(smart_parking_qt_client
     src/main.cpp
+    src/auth/authclient.cpp
+    src/auth/authclient.h
+    src/auth/authsession.h
     src/adapters/serverfireeventadapter.cpp
     src/adapters/serverfireeventadapter.h
     src/adapters/serverparkingeventadapter.cpp
@@ -85,6 +88,8 @@ add_executable(smart_parking_qt_client
     src/dialogs/slotevidencedialog.h
     src/dialogs/firealarmpopup.cpp
     src/dialogs/firealarmpopup.h
+    src/dialogs/logindialog.cpp
+    src/dialogs/logindialog.h
     src/models/monitoringevent.cpp
     src/models/monitoringevent.h
     src/models/parkingcapturegroup.cpp
@@ -103,14 +108,10 @@ add_executable(smart_parking_qt_client
     src/pages/evidencepage.h
     src/pages/eventspage.cpp
     src/pages/eventspage.h
-    src/pages/imagecomparepage.cpp
-    src/pages/imagecomparepage.h
     src/pages/ivasettingspage.cpp
     src/pages/ivasettingspage.h
     src/pages/parkingmappage.cpp
     src/pages/parkingmappage.h
-    src/pages/parkingroisettingspage.cpp
-    src/pages/parkingroisettingspage.h
     src/pages/settingspage.cpp
     src/pages/settingspage.h
     src/services/camerasettings.cpp
@@ -130,6 +131,7 @@ add_executable(smart_parking_qt_client
     src/api/apiclient.h
     src/api/imageloader.cpp
     src/api/imageloader.h
+    src/api/urlorigin.h
     src/api/parkingmodels.h
     src/api/parkingroi.cpp
     src/api/parkingroi.h
@@ -181,6 +183,38 @@ if (QT_VERSION_MAJOR EQUAL 6)
 else()
     qt5_add_resources(RTSP_QML_RESOURCES qml/rtsp_qml.qrc)
     target_sources(smart_parking_qt_client PRIVATE ${RTSP_QML_RESOURCES})
+endif()
+
+if (QT_VERSION_MAJOR EQUAL 6)
+    qt_add_resources(smart_parking_qt_client nav_icons
+        PREFIX "/"
+        FILES
+            resources/icons/dashboard.svg
+            resources/icons/parking-map.svg
+            resources/icons/events.svg
+            resources/icons/evidence.svg
+            resources/icons/settings.svg
+            resources/icons/iva-setup.svg
+            resources/icons/debug.svg
+            resources/icons/monitor-connected.svg
+            resources/icons/monitor-connecting.svg
+            resources/icons/monitor-disconnected.svg
+            resources/icons/iva/detection-enter.svg
+            resources/icons/iva/detection-generic.svg
+            resources/icons/iva/detection-intrusion.svg
+            resources/icons/iva/detection-loitering.svg
+            resources/icons/iva/check.svg
+            resources/icons/iva/object-bicycle.svg
+            resources/icons/iva/object-bus.svg
+            resources/icons/iva/object-car.svg
+            resources/icons/iva/object-generic.svg
+            resources/icons/iva/object-motorcycle.svg
+            resources/icons/iva/object-person.svg
+            resources/icons/iva/object-truck.svg
+    )
+else()
+    qt5_add_resources(NAV_ICON_RESOURCES resources/navicons.qrc)
+    target_sources(smart_parking_qt_client PRIVATE ${NAV_ICON_RESOURCES})
 endif()
 
 if (EXISTS "${FFMPEG_BINARY_DIR}")
@@ -494,6 +528,66 @@ if (BUILD_TESTING)
     )
     add_test(NAME api_client_json COMMAND apiclient_json_test)
 
+    add_executable(authclient_test
+        tests/authclient_test.cpp
+        src/auth/authclient.cpp
+        src/auth/authclient.h
+        src/auth/authsession.h
+        src/api/urlorigin.h
+    )
+    target_include_directories(authclient_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(authclient_test PRIVATE
+        Qt${QT_VERSION_MAJOR}::Core
+        Qt${QT_VERSION_MAJOR}::Network
+        Qt${QT_VERSION_MAJOR}::Test
+    )
+    set_target_properties(authclient_test PROPERTIES
+        AUTOMOC_COMPILER_PREDEFINES OFF
+    )
+    add_test(NAME auth_client COMMAND authclient_test)
+
+    add_executable(logindialog_test
+        tests/logindialog_test.cpp
+        src/auth/authclient.cpp
+        src/auth/authclient.h
+        src/auth/authsession.h
+        src/api/urlorigin.h
+        src/dialogs/logindialog.cpp
+        src/dialogs/logindialog.h
+    )
+    target_include_directories(logindialog_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(logindialog_test PRIVATE
+        Qt${QT_VERSION_MAJOR}::Widgets
+        Qt${QT_VERSION_MAJOR}::Network
+        Qt${QT_VERSION_MAJOR}::Test
+    )
+    set_target_properties(logindialog_test PROPERTIES
+        AUTOMOC_COMPILER_PREDEFINES OFF
+    )
+    add_test(NAME login_dialog COMMAND logindialog_test)
+
+    add_executable(imageloader_auth_test
+        tests/imageloader_auth_test.cpp
+        src/api/imageloader.cpp
+        src/api/imageloader.h
+        src/api/urlorigin.h
+    )
+    target_include_directories(imageloader_auth_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(imageloader_auth_test PRIVATE
+        Qt${QT_VERSION_MAJOR}::Widgets
+        Qt${QT_VERSION_MAJOR}::Network
+    )
+    set_target_properties(imageloader_auth_test PROPERTIES
+        AUTOMOC_COMPILER_PREDEFINES OFF
+    )
+    add_test(NAME image_loader_auth COMMAND imageloader_auth_test)
+
     add_executable(settingspage_overstay_test
         tests/settingspage_overstay_test.cpp
         src/pages/settingspage.cpp
@@ -563,27 +657,6 @@ if (BUILD_TESTING)
         AUTOMOC_COMPILER_PREDEFINES OFF
     )
     add_test(NAME parkingroi_codec COMMAND parkingroi_codec_test)
-
-    add_executable(parkingroisettingspage_test
-        tests/parkingroisettingspage_test.cpp
-        src/api/parkingroi.cpp
-        src/api/parkingroi.h
-        src/iva/ivaareamodels.h
-        src/iva/ivavideocanvas.cpp
-        src/iva/ivavideocanvas.h
-        src/pages/parkingroisettingspage.cpp
-        src/pages/parkingroisettingspage.h
-    )
-    target_include_directories(parkingroisettingspage_test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src"
-    )
-    target_link_libraries(parkingroisettingspage_test PRIVATE
-        Qt${QT_VERSION_MAJOR}::Widgets
-    )
-    set_target_properties(parkingroisettingspage_test PROPERTIES
-        AUTOMOC_COMPILER_PREDEFINES OFF
-    )
-    add_test(NAME parking_roi_settings_page COMMAND parkingroisettingspage_test)
 
     add_executable(parkingroicontroller_test
         tests/parkingroicontroller_test.cpp
@@ -781,6 +854,8 @@ if (BUILD_TESTING)
         src/iva/ivaareamodels.h
         src/iva/ivavideocanvas.cpp
         src/iva/ivavideocanvas.h
+        src/models/parkingzonelayout.cpp
+        src/models/parkingzonelayout.h
         src/pages/ivasettingspage.cpp
         src/pages/ivasettingspage.h
     )
@@ -790,6 +865,27 @@ if (BUILD_TESTING)
     target_link_libraries(ivasettingspage_test PRIVATE
         Qt${QT_VERSION_MAJOR}::Widgets
     )
+    if (QT_VERSION_MAJOR EQUAL 6)
+        qt_add_resources(ivasettingspage_test iva_item_icons
+            PREFIX "/"
+            FILES
+                resources/icons/iva/detection-enter.svg
+                resources/icons/iva/detection-generic.svg
+                resources/icons/iva/detection-intrusion.svg
+                resources/icons/iva/detection-loitering.svg
+                resources/icons/iva/check.svg
+                resources/icons/iva/object-bicycle.svg
+                resources/icons/iva/object-bus.svg
+                resources/icons/iva/object-car.svg
+                resources/icons/iva/object-generic.svg
+                resources/icons/iva/object-motorcycle.svg
+                resources/icons/iva/object-person.svg
+                resources/icons/iva/object-truck.svg
+        )
+    else()
+        qt5_add_resources(IVA_ITEM_ICON_RESOURCES resources/ivaitemicons.qrc)
+        target_sources(ivasettingspage_test PRIVATE ${IVA_ITEM_ICON_RESOURCES})
+    endif()
     set_target_properties(ivasettingspage_test PROPERTIES
         AUTOMOC_COMPILER_PREDEFINES OFF
     )
@@ -825,32 +921,6 @@ if (BUILD_TESTING)
     )
     add_test(NAME evidencepage COMMAND evidencepage_test)
 
-    add_executable(imagecomparepage_test
-        tests/imagecomparepage_test.cpp
-        src/pages/imagecomparepage.cpp
-        src/pages/imagecomparepage.h
-        src/models/parkingcapturegroup.cpp
-        src/models/parkingcapturegroup.h
-        src/models/parkingstate.cpp
-        src/models/parkingstate.h
-        src/models/slotidmapper.cpp
-        src/models/slotidmapper.h
-        src/api/imageloader.cpp
-        src/api/imageloader.h
-        src/api/parkingmodels.h
-    )
-    target_include_directories(imagecomparepage_test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src"
-    )
-    target_link_libraries(imagecomparepage_test PRIVATE
-        Qt${QT_VERSION_MAJOR}::Widgets
-        Qt${QT_VERSION_MAJOR}::Network
-    )
-    set_target_properties(imagecomparepage_test PROPERTIES
-        AUTOMOC_COMPILER_PREDEFINES OFF
-    )
-    add_test(NAME imagecomparepage COMMAND imagecomparepage_test)
-
     add_executable(eventspage_filter_test
         tests/eventspage_filter_test.cpp
         src/pages/eventspage.cpp
@@ -879,12 +949,17 @@ if (BUILD_TESTING)
         src/models/slotidmapper.h
         src/models/parkingzonelayout.cpp
         src/models/parkingzonelayout.h
+        src/models/monitoringevent.cpp
+        src/models/monitoringevent.h
+        src/api/imageloader.cpp
+        src/api/imageloader.h
     )
     target_include_directories(parkingmappage_add_slot_test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     )
     target_link_libraries(parkingmappage_add_slot_test PRIVATE
         Qt${QT_VERSION_MAJOR}::Widgets
+        Qt${QT_VERSION_MAJOR}::Network
     )
     set_target_properties(parkingmappage_add_slot_test PROPERTIES
         AUTOMOC_COMPILER_PREDEFINES OFF
@@ -901,12 +976,17 @@ if (BUILD_TESTING)
         src/models/slotidmapper.h
         src/models/parkingzonelayout.cpp
         src/models/parkingzonelayout.h
+        src/models/monitoringevent.cpp
+        src/models/monitoringevent.h
+        src/api/imageloader.cpp
+        src/api/imageloader.h
     )
     target_include_directories(parkingmappage_channel_names_test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     )
     target_link_libraries(parkingmappage_channel_names_test PRIVATE
         Qt${QT_VERSION_MAJOR}::Widgets
+        Qt${QT_VERSION_MAJOR}::Network
     )
     set_target_properties(parkingmappage_channel_names_test PROPERTIES
         AUTOMOC_COMPILER_PREDEFINES OFF
@@ -923,12 +1003,17 @@ if (BUILD_TESTING)
         src/models/slotidmapper.h
         src/models/parkingzonelayout.cpp
         src/models/parkingzonelayout.h
+        src/models/monitoringevent.cpp
+        src/models/monitoringevent.h
+        src/api/imageloader.cpp
+        src/api/imageloader.h
     )
     target_include_directories(parkingmappage_undo_test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     )
     target_link_libraries(parkingmappage_undo_test PRIVATE
         Qt${QT_VERSION_MAJOR}::Widgets
+        Qt${QT_VERSION_MAJOR}::Network
     )
     set_target_properties(parkingmappage_undo_test PROPERTIES
         AUTOMOC_COMPILER_PREDEFINES OFF
@@ -945,12 +1030,17 @@ if (BUILD_TESTING)
         src/models/slotidmapper.h
         src/models/parkingzonelayout.cpp
         src/models/parkingzonelayout.h
+        src/models/monitoringevent.cpp
+        src/models/monitoringevent.h
+        src/api/imageloader.cpp
+        src/api/imageloader.h
     )
     target_include_directories(parkingmappage_ev_status_test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     )
     target_link_libraries(parkingmappage_ev_status_test PRIVATE
         Qt${QT_VERSION_MAJOR}::Widgets
+        Qt${QT_VERSION_MAJOR}::Network
     )
     set_target_properties(parkingmappage_ev_status_test PROPERTIES
         AUTOMOC_COMPILER_PREDEFINES OFF
@@ -984,17 +1074,17 @@ if (BUILD_TESTING)
             "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${QT_RUNTIME_ROOT}/plugins/platforms"
         TIMEOUT 30
     )
-    set_tests_properties(imagecomparepage PROPERTIES
-        ENVIRONMENT
-            "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${QT_RUNTIME_ROOT}/plugins/platforms"
-        TIMEOUT 30
-    )
     set_tests_properties(settings_page_overstay PROPERTIES
         ENVIRONMENT
             "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${QT_RUNTIME_ROOT}/plugins/platforms"
         TIMEOUT 30
     )
-    set_tests_properties(parking_roi_settings_page PROPERTIES
+    set_tests_properties(login_dialog PROPERTIES
+        ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${QT_RUNTIME_ROOT}/plugins/platforms"
+        TIMEOUT 30
+    )
+    set_tests_properties(image_loader_auth PROPERTIES
         ENVIRONMENT
             "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${QT_RUNTIME_ROOT}/plugins/platforms"
         TIMEOUT 30

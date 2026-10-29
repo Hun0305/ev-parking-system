@@ -14,19 +14,37 @@ struct Result
 {
     bool received = false;
     bool failed = false;
+    bool authenticationRequired = false;
     QString error;
     int status = 0;
     QByteArray request;
 };
 
+enum class AuthenticationMode {
+    None,
+    SameOrigin,
+    CrossOrigin
+};
+
 Result runScenario(int httpStatus, const QByteArray &responseBody,
-                   bool putRequest, bool respond, int clientTimeoutMs)
+                   bool putRequest, bool respond, int clientTimeoutMs,
+                   AuthenticationMode authenticationMode =
+                       AuthenticationMode::None)
 {
     QTcpServer server;
     if (!server.listen(QHostAddress::LocalHost, 0)) return {};
-    ApiClient client(QUrl(QStringLiteral("http://127.0.0.1:%1")
-                              .arg(server.serverPort())),
-                     clientTimeoutMs, true);
+    const QUrl serverOrigin(QStringLiteral("http://127.0.0.1:%1")
+                                .arg(server.serverPort()));
+    ApiClient client(serverOrigin, clientTimeoutMs, true);
+    if (authenticationMode == AuthenticationMode::SameOrigin) {
+        client.setBearerAuthentication(
+            serverOrigin, QByteArrayLiteral("same-origin-token"));
+    } else if (authenticationMode == AuthenticationMode::CrossOrigin) {
+        client.setBearerAuthentication(
+            QUrl(QStringLiteral("http://localhost:%1")
+                     .arg(server.serverPort())),
+            QByteArrayLiteral("cross-origin-token"));
+    }
     Result result;
     QEventLoop loop;
 
@@ -72,6 +90,11 @@ Result runScenario(int httpStatus, const QByteArray &responseBody,
         result.failed = true;
         result.error = error;
         result.status = status;
+        loop.quit();
+    });
+    QObject::connect(&client, &ApiClient::authenticationRequired, &loop,
+                     [&]() {
+        result.authenticationRequired = true;
         loop.quit();
     });
     QTimer::singleShot(2000, &loop, &QEventLoop::quit);
@@ -134,5 +157,34 @@ int main(int argc, char **argv)
     QTimer::singleShot(1500, &failureLoop, &QEventLoop::quit);
     unavailable.getJson(QStringLiteral("/settings"));
     failureLoop.exec();
-    return connectionFailed ? 0 : 10;
+    if (!connectionFailed) return 10;
+
+    const Result sameOrigin = runScenario(
+        200, R"({"success":true})", false, true, 500,
+        AuthenticationMode::SameOrigin);
+    if (!sameOrigin.received || sameOrigin.failed) return 11;
+    if (!sameOrigin.request.toLower().contains(
+            "authorization: bearer same-origin-token")) return 12;
+
+    const Result crossOrigin = runScenario(
+        200, R"({"success":true})", false, true, 500,
+        AuthenticationMode::CrossOrigin);
+    if (!crossOrigin.received || crossOrigin.failed) return 13;
+    if (crossOrigin.request.toLower().contains("authorization:")) return 14;
+
+    const Result unauthorized = runScenario(
+        401, R"({"success":false,"error":"authentication required"})",
+        false, true, 500, AuthenticationMode::SameOrigin);
+    if (!unauthorized.authenticationRequired
+        || unauthorized.received || unauthorized.failed) return 15;
+
+    const Result crossOriginUnauthorized = runScenario(
+        401, R"({"success":false,"error":"authentication required"})",
+        false, true, 500, AuthenticationMode::CrossOrigin);
+    if (crossOriginUnauthorized.authenticationRequired
+        || crossOriginUnauthorized.received
+        || !crossOriginUnauthorized.failed
+        || crossOriginUnauthorized.status != 401) return 16;
+
+    return 0;
 }

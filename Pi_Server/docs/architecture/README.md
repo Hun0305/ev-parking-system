@@ -60,7 +60,7 @@ EVDA-192에서는 CH1의 WiseAI `name1`~`name4`를 EV01~EV04에 1:1로
 Hall OCCUPIED 중 먼저 확정된 입력으로 세션 하나를 만들고, 나중 입력은 동일
 세션의 확인 상태만 보강한다. IVA만 확인한 세션은 IVA EXIT, Hall만 확인한 세션은
 Hall VACANT이 종료 권한을 가지며, 둘 다 확인한 세션은 두 입력이 모두 VACANT일
-때 종료한다. IVA EXIT는 기본 20초 확인 후 확정한다. 신규 이미지는
+때 종료한다. IVA EXIT는 기본 10초 확인 후 확정한다. 신규 이미지는
 `ch1/EV01/<stage>/`에 저장하고 파일명과 DB에 `session_id`를 보존한다. Snapshot
 API 모드에서는 좌표 확정 전까지 카메라의 전체 original/enhanced 프레임을 저장한다.
 
@@ -125,8 +125,8 @@ sequenceDiagram
         C->>DB: HALL_60S IMAGE_LOG
         C->>O: 60초 이미지 OCR 재시도
     end
-    O->>DB: VEHICLE EV/PHEV/NON_EV/UNKNOWN 조회
-    alt EV or PHEV
+    O->>DB: VEHICLE EV/NON_EV/UNKNOWN 조회
+    alt EV
         O->>T: 같은 session_id로 타이머 등록
     else NON_EV or UNKNOWN
         O->>T: 경고 이벤트, EV 장기점유 타이머 미등록
@@ -264,7 +264,7 @@ WiseAI IVA MQTT → Snapshot API → ROI crop → Gemini OCR이다.
 
 | 테이블 | 책임 |
 |---|---|
-| `VEHICLE` | 번호판, EV/PHEV 등록 정보 |
+| `VEHICLE` | 번호판, 이진 EV 등록 정보 |
 | `PARKING_SLOT` | 슬롯 종류, 점유 상태, 센서 종류 |
 | `PARKING_SESSION` | 입차, 출차, 위반, 번호판, 차량 연결 |
 | `IMAGE_LOG` | 원본/개선 파일 경로, OCR, 촬영 사유 |
@@ -309,6 +309,8 @@ Qt → Pi HTTP/HTTPS:
 
 ```text
 GET /api/v1/health
+POST /api/v1/auth/login
+POST /api/v1/auth/logout
 GET /api/v1/parking-slots
 GET /api/v1/parking-slots/{slot_id}
 GET /api/v1/parking-sessions/active
@@ -317,9 +319,10 @@ GET /api/v1/images/{image_id}/original
 GET /api/v1/images/{image_id}/enhanced
 ```
 
-인증서와 개인키를 둘 다 설정하면 `cpp-httplib` `SSLServer`로 HTTPS를 사용하고,
-둘 다 비우면 HTTP로 동작한다. 현재 API token, 로그인, 클라이언트 인증서는
-구현되지 않았다.
+`GET /api/v1/health`와 `POST /api/v1/auth/login`만 공개한다. 나머지 API는
+SQLite `app_sessions`에 저장한 SHA-256 token digest로 Bearer 인증한다. 비밀번호는
+libsodium Argon2id PHC 문자열로 저장한다. 원격 listener는 인증서와 개인키가
+없거나 잘못되면 시작을 거부하며 HTTP로 fallback하지 않는다.
 
 ## 8. 오류 보고와 동시성
 

@@ -5,6 +5,7 @@
 #include <QGraphicsView>
 
 class QGraphicsPixmapItem;
+class QGraphicsEllipseItem;
 class QGraphicsPolygonItem;
 class QGraphicsRectItem;
 class QGraphicsScene;
@@ -25,6 +26,7 @@ public:
     void setAreas(const QList<IvaAreaDefinition> &areas);
     void setSelectedAreaIndex(int areaIndex);
     void setDrawMode(bool enabled);
+    void setEditMode(bool enabled);
     bool drawMode() const { return m_drawMode; }
     bool frameCompatible() const { return m_frameCompatible; }
     QString frameCompatibilityMessage() const { return m_frameCompatibilityMessage; }
@@ -42,6 +44,7 @@ public:
 
 signals:
     void rectangleDrafted(const QRectF &sourceRectangle);
+    void rectangleEdited(const QRectF &sourceRectangle);
     void rectangleRejected(const QString &message);
     void areaSelected(int areaIndex);
     void frameCompatibilityChanged(bool compatible, const QString &message);
@@ -53,7 +56,22 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
 
 private:
+    enum class InteractionMode {
+        None,
+        DrawRectangle,
+        MoveRectangle,
+        MoveVertex,
+    };
+
     QPointF boundedScenePoint(const QPoint &viewportPoint) const;
+    QRectF selectedAreaRectangle() const;
+    int selectedVertexAt(const QPointF &scenePoint) const;
+    qreal sceneInteractionTolerance() const;
+    void setSelectedRectangle(const QRectF &rectangle);
+    void rebuildEditHandles();
+    void clearEditHandles();
+    void updateCursor();
+    void updateCursorAt(const QPointF &scenePoint);
     void rebuildOverlays();
     void updateOverlayStyles();
     void fitScene();
@@ -66,6 +84,7 @@ private:
     QGraphicsScene *m_scene = nullptr;
     QGraphicsPixmapItem *m_frameItem = nullptr;
     QList<QGraphicsPolygonItem *> m_areaItems;
+    QList<QGraphicsEllipseItem *> m_editHandles;
     QGraphicsRectItem *m_draftItem = nullptr;
     QGraphicsRectItem *m_savedParkingRoiItem = nullptr;
     QGraphicsRectItem *m_selectedParkingRoiItem = nullptr;
@@ -75,7 +94,12 @@ private:
     int m_channel = -1;
     int m_selectedAreaIndex = -1;
     bool m_drawMode = false;
+    bool m_editMode = false;
     bool m_dragging = false;
+    InteractionMode m_interactionMode = InteractionMode::None;
+    int m_dragVertex = -1;
+    QRectF m_dragStartRectangle;
+    QRectF m_editRectangle;
     bool m_frameCompatible = false;
     QString m_frameCompatibilityMessage;
 };

@@ -19,6 +19,9 @@ bool EventDatabase::open(const std::string& db_path) {
     // C DB manager가 전역 연결 하나를 사용하므로 모든 접근을 같은 mutex로 직렬화한다.
     std::lock_guard<std::mutex> lock(db_mutex_);
     if (opened_) {
+        // 캐시된 statement는 이전 연결에 묶여 있다. 연결을 닫기 전에
+        // finalize하지 않으면 dangling handle이 남는다.
+        clearStatementCacheUnlocked();
         db_close();
         opened_ = false;
     }
@@ -33,6 +36,10 @@ bool EventDatabase::open(const std::string& db_path) {
 
     db_ = db_native_handle();
     opened_ = true;
+    // 연결 정책은 어느 생성자를 거쳤든 항상 여기서 적용한다. 경로를 받는
+    // 생성자에만 두었을 때 기본 생성자 + open() 경로(main.cpp)가 통째로
+    // 누락됐다. 근거: docs/PERFORMANCE_PROFILING_REPORT_1H.md
+    applyConnectionPragmasUnlocked();
     util::logInfo("MVP parking DB opened: " + db_path_);
     return true;
 }
@@ -42,6 +49,8 @@ void EventDatabase::close() {
     runtime_schema_ready_ = false;
     occupancy_schema_ready_ = false;
     if (opened_) {
+        // sqlite3_close 전에 모든 statement를 finalize해야 한다.
+        clearStatementCacheUnlocked();
         db_close();
         db_ = nullptr;
         opened_ = false;
@@ -220,38 +229,10 @@ std::string EventDatabase::applyPlateOcr(int session_id,
                                          const std::string& image_path,
                                          const std::string& plate_number,
                                          double confidence) {
-    std::lock_guard<std::mutex> lock(db_mutex_);
-    if (!opened_) return "DB_ERROR";
-
-    const char* ocr = plate_number.empty() ? nullptr : plate_number.c_str();
-    if (db_update_image_ocr_by_path(image_path.c_str(), ocr) < 0)
-        util::logError("OCR IMAGE_LOG update failed: " + image_path);
-
-    std::string classification = "OCR_FAILED";
-    int vehicle_id = -1;
-    int is_ev = -1;
-    int is_phev = -1;
-    if (!plate_number.empty()) {
-        int lookup = db_get_vehicle_by_plate(
-            plate_number.c_str(), &vehicle_id, &is_ev, &is_phev);
-        classification = lookup == 0
-            ? (is_ev ? "EV" : (is_phev ? "PHEV" : "NON_EV"))
-            : "UNKNOWN";
-        if (session_id >= 0 &&
-            db_assign_vehicle_to_session(session_id,
-                                         lookup == 0 ? vehicle_id : -1,
-                                         plate_number.c_str()) < 0)
-            util::logError("OCR parking session update failed: session=" +
-                           std::to_string(session_id));
-    }
-
-    std::ostringstream message;
-    message << "plate=" << plate_number << " classification=" << classification
-            << " confidence=" << confidence << " image=" << image_path;
-    db_insert_event_log(session_id, slot_id.empty() ? nullptr : slot_id.c_str(),
-                        ("PLATE_OCR_" + classification).c_str(),
-                        message.str().c_str());
-    return classification;
+    return applyPlateOcrWithEntrance(
+               session_id, slot_id, image_path, plate_number, confidence,
+               30LL * 60LL * 1000LL, 0.85)
+        .classification;
 }
 
 namespace {

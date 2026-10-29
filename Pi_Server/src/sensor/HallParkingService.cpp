@@ -145,6 +145,8 @@ HallParkingService::HallParkingService(
            .durablePendingCapacity = static_cast<std::size_t>(
                 std::max(1, app_config.parking_hall_work_queue_capacity)),
             .retryDelay = std::chrono::milliseconds(50),
+            .retentionPeriod = std::chrono::hours(
+                24 * std::max(1, app_config.occupancy_inbox_retention_days)),
             .checkpoint = std::move(actor_checkpoint)},
            [this](const parking::CommittedOccupancyTransition& transition) {
               return applyCommittedEffects(transition);
@@ -279,7 +281,7 @@ parking::SlotTransitionCommand HallParkingService::makeCameraCommand(
         {"correlation_id", correlation_id},
         {"correlation_expires_at_epoch_ms",
          correlation_expires_at_epoch_ms},
-        {"transport", "camera-mqtt"},
+        {"transport", signal.sourceTransport},
         {"occurred_at_epoch_ms", occurred_epoch_ms},
         {"timestamp_authority", signal.occurredAtFromSource
              ? "CAMERA_UTC" : "RECEIVE_FALLBACK"},
@@ -379,7 +381,7 @@ bool HallParkingService::handleCameraIvaSignal(
     if (!submitted.accepted()) {
         report(::event::SystemEventCode::HallWorkQueueOverflow,
                ::event::SystemEventSeverity::Error, submitted.message,
-               "camera-mqtt", signal.slotId);
+               signal.sourceTransport, signal.slotId);
         util::logWarn("IVA durable admission rejected: slot=" +
                       signal.slotId + " reason=" + submitted.message);
         return false;
