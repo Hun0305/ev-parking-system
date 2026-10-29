@@ -1,6 +1,6 @@
 # Pi Server 트러블슈팅 기록
 
-- 기준일: 2026-08-01
+- 기준일: 2026-08-12
 - 대상: Raspberry Pi C++ 서버, Mosquitto, Hanwha Vision Camera, STM32 UART, SQLite, Qt 연동
 - 원칙: 새 장애가 발생하면 이 문서에 증상, 확인 명령, 원인, 해결, 재발 방지를 추가한다.
 
@@ -67,7 +67,7 @@ curl --max-time 3 http://127.0.0.1:8080/api/v1/health
 해결:
 
 ```bash
-./set.sh
+./run_server.sh
 ```
 
 정상 확인 주소:
@@ -176,12 +176,12 @@ mosquitto_pub -h localhost -q 1 \
 
 - 상태: 설정 확인 필요
 - 증상: `parking/sensor/hall`에 메시지를 발행해도 DB 세션과 타이머가 시작되지 않는다.
-- 원인 사례: `.env.fire.local`의 `HALL_MQTT_INPUT_ENABLED=false`.
+- 원인 사례: `.env.public`의 `HALL_MQTT_INPUT_ENABLED=false`.
 
 확인:
 
 ```bash
-grep '^HALL_MQTT_INPUT_ENABLED' .env.fire.local .env.example 2>/dev/null
+grep '^HALL_MQTT_INPUT_ENABLED' .env.public 2>/dev/null
 ```
 
 실제 서버 흐름을 시험하려면 서버 시작 전에 다음을 적용한다.
@@ -294,8 +294,9 @@ sqlite3 -header -column data/db/parking.db 'SELECT * FROM VEHICLE;'
 
 ### TS-011 BestShot이 저장되지 않음
 
-- 상태: 카메라 이벤트 조건과 DB 세션 상태에 따라 다름
+- 상태: 현재 운영 기본은 `BESTSHOT_ENABLED=false`이므로 저장되지 않는 것이 정상
 - 확인 항목:
+  - BestShot을 의도했다면 `BESTSHOT_ENABLED=true`인가.
   - RTSP metadata track에서 vehicle/plate ImageRef가 실제 발생했는가.
   - 카메라 HTTPS Digest 다운로드가 성공했는가.
   - vehicle과 plate의 object/channel 상관관계가 맞는가.

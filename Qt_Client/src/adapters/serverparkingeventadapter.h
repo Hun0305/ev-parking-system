@@ -11,6 +11,7 @@ struct ServerParkingEvent {
     QString channelId;
     QString plateNumber;
     QString vehicleType;
+    QString vehicleClassification;
     QString parkingState;
     QString alarmKind;
     QString alarmState;
@@ -20,6 +21,8 @@ struct ServerParkingEvent {
     QDateTime occurredAt;
     qint64 sessionId = -1;
     int occupiedSeconds = 0;
+    QString correlationId;
+    QString ocrStatus;
 };
 
 class ServerParkingEventAdapter

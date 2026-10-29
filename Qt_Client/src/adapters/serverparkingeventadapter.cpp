@@ -33,6 +33,10 @@ bool ServerParkingEventAdapter::parse(const QJsonObject &object,
     parsed.channelId = object.value(QStringLiteral("channel_id")).toString().trimmed();
     parsed.plateNumber = object.value(QStringLiteral("plate_number")).toString().trimmed();
     parsed.vehicleType = upperString(object, QStringLiteral("vehicle_type"));
+    parsed.vehicleClassification = upperString(object, QStringLiteral("vehicle_classification"));
+    if (parsed.vehicleType.isEmpty()) {
+        parsed.vehicleType = parsed.vehicleClassification;
+    }
     parsed.parkingState = upperString(object, QStringLiteral("parking_state"));
     parsed.alarmKind = upperString(object, QStringLiteral("alarm_kind"));
     if (parsed.alarmKind.isEmpty()) {
@@ -45,6 +49,8 @@ bool ServerParkingEventAdapter::parse(const QJsonObject &object,
     parsed.sessionId = integerValue(object.value(QStringLiteral("session_id")), -1);
     parsed.occupiedSeconds = static_cast<int>(
         qMax<qint64>(0, integerValue(object.value(QStringLiteral("occupied_seconds")), 0)));
+    parsed.correlationId = object.value(QStringLiteral("correlation_id")).toString().trimmed();
+    parsed.ocrStatus = upperString(object, QStringLiteral("ocr_status"));
     parsed.occurredAt = QDateTime::fromString(
         object.value(QStringLiteral("timestamp")).toString().trimmed(), Qt::ISODate);
 

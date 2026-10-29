@@ -38,7 +38,7 @@ int main(int argc, char **argv)
 
     int requestCount = 0;
     QString requestedSlot;
-    QObject::connect(&page, &EvidencePage::evidenceRequested,
+    QObject::connect(&page, &EvidencePage::slotEvidenceRequested,
                      [&](const QString &slotId) {
         ++requestCount;
         requestedSlot = slotId;
@@ -130,9 +130,34 @@ int main(int argc, char **argv)
     if (!firstOpen || !firstOpen->isEnabled()
         || !selectedOpen || !selectedOpen->isEnabled()) return 12;
 
+    int eventRequestCount = 0;
+    QString requestedEventId;
+    QObject::connect(&page, &EvidencePage::eventEvidenceRequested,
+                     [&](const QString &eventId) {
+        ++eventRequestCount;
+        requestedEventId = eventId;
+    });
+    page.openEvent(QStringLiteral("session-8-overstay"),
+                   QStringLiteral("EV-02"));
+    if (page.currentEventId() != QStringLiteral("session-8-overstay")
+        || page.currentSlotId() != QStringLiteral("EV-02")) return 23;
+    page.requestCurrentEvidence();
+    if (eventRequestCount != 1
+        || requestedEventId != QStringLiteral("session-8-overstay")) return 24;
+    page.showEventEvidence(
+        QStringLiteral("session-8-overstay"), QStringLiteral("EV-02"), 8,
+        SlotState::OvertimeAlert, QStringLiteral("34B7788"),
+        {firstOriginal, latestOriginal, latestEnhanced});
+    if (page.captureCount() != 2
+        || !summary->text().contains(QStringLiteral("session-8-overstay"))
+        || !summary->text().contains(QStringLiteral("Session 8"))) return 25;
+
     EventsPage eventsPage;
     MonitoringEvent event;
+    event.id = QStringLiteral("session-8-overstay");
     event.sourceId = QStringLiteral("EV-02");
+    event.evidenceSlotId = QStringLiteral("EV-02");
+    event.parkingSessionId = 8;
     event.eventType = QStringLiteral("OVERTIME_ALERT");
     event.message = QStringLiteral("Parking time exceeded");
     event.status = QStringLiteral("OPEN");
@@ -141,17 +166,17 @@ int main(int argc, char **argv)
         QStringLiteral("eventLogTable"));
     if (!eventTable || eventTable->rowCount() != 1) return 16;
     int eventNavigationCount = 0;
-    QString eventSourceId;
-    QObject::connect(&eventsPage, &EventsPage::evidenceRequested,
-                     [&](const QString &sourceId) {
+    QString navigationEventId;
+    QObject::connect(&eventsPage, &EventsPage::eventEvidenceRequested,
+                     [&](const QString &eventId) {
         ++eventNavigationCount;
-        eventSourceId = sourceId;
+        navigationEventId = eventId;
     });
     if (!QMetaObject::invokeMethod(
             eventTable, "cellDoubleClicked", Qt::DirectConnection,
             Q_ARG(int, 0), Q_ARG(int, 2))) return 17;
     if (eventNavigationCount != 1
-        || eventSourceId != QStringLiteral("EV-02")) return 18;
+        || navigationEventId != QStringLiteral("session-8-overstay")) return 18;
 
     QPushButton *helpButton = page.findChild<QPushButton *>(
         QStringLiteral("evidenceHelpButton"));

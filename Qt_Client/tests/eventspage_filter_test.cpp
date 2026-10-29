@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QComboBox>
+#include <QDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -15,9 +16,14 @@ MonitoringEvent makeEvent(const QString &sourceId,
                           EventAckState ackState = EventAckState::None)
 {
     MonitoringEvent event;
+    event.id = sourceId + QLatin1Char('|') + eventType;
     event.occurredAt = QDateTime::fromString(
         QStringLiteral("2026-07-28T10:00:00+09:00"), Qt::ISODate);
     event.sourceId = sourceId;
+    if (sourceId.startsWith(QStringLiteral("EV-"))
+        || sourceId.startsWith(QStringLiteral("P-"))) {
+        event.evidenceSlotId = sourceId;
+    }
     event.eventType = eventType;
     event.message = message;
     event.status = status;
@@ -108,17 +114,18 @@ int main(int argc, char **argv)
         || table->isRowHidden(2)) return 11;
 
     int navigationCount = 0;
-    QString navigationSource;
-    QObject::connect(&page, &EventsPage::evidenceRequested,
-                     [&](const QString &sourceId) {
+    QString navigationEventId;
+    QObject::connect(&page, &EventsPage::eventEvidenceRequested,
+                     [&](const QString &eventId) {
         ++navigationCount;
-        navigationSource = sourceId;
+        navigationEventId = eventId;
     });
     if (!QMetaObject::invokeMethod(
             table, "cellDoubleClicked", Qt::DirectConnection,
             Q_ARG(int, 0), Q_ARG(int, 2))) return 12;
     if (navigationCount != 1
-        || navigationSource != QStringLiteral("EV-01")) return 13;
+        || navigationEventId
+            != QStringLiteral("EV-01|OVERTIME_ALERT")) return 13;
 
     resetButton->click();
     if (!selectFilterValue(eventTypeFilter, QStringLiteral("FIRE_SUSPECTED"))) return 14;
@@ -155,6 +162,20 @@ int main(int argc, char **argv)
         || eventTypeFilter->currentIndex() != 0
         || statusFilter->currentIndex() != 0
         || resetButton->isEnabled()) return 25;
+
+    QPushButton *helpButton = page.findChild<QPushButton *>(
+        QStringLiteral("eventsHelpButton"));
+    if (!helpButton) return 26;
+    helpButton->click();
+    QApplication::processEvents();
+    QDialog *helpDialog = page.findChild<QDialog *>(
+        QStringLiteral("eventsHelpDialog"));
+    QLabel *helpSteps = helpDialog
+        ? helpDialog->findChild<QLabel *>(QStringLiteral("eventsHelpSteps"))
+        : nullptr;
+    if (!helpDialog || !helpSteps
+        || !helpSteps->text().contains(QStringLiteral("Export CSV"))) return 27;
+    helpDialog->close();
 
     return 0;
 }

@@ -35,15 +35,24 @@ public:
                       const QList<ParkingImageResource> &images);
     void showLoading(const QString &slotId);
     void showError(const QString &slotId, const QString &message);
+    void openEvent(const QString &eventId, const QString &slotId);
+    void showEventEvidence(const QString &eventId, const QString &slotId,
+                           qint64 sessionId, SlotState state,
+                           const QString &plateNumber,
+                           const QList<ParkingImageResource> &images);
+    void showEventError(const QString &eventId, const QString &slotId,
+                        const QString &message);
     bool selectSlot(const QString &slotId);
     QString currentSlotId() const;
+    QString currentEventId() const;
     int captureCount() const;
 
 public slots:
     void requestCurrentEvidence();
 
 signals:
-    void evidenceRequested(const QString &slotId);
+    void slotEvidenceRequested(const QString &slotId);
+    void eventEvidenceRequested(const QString &eventId);
 
 private:
     void handleSlotChanged(QListWidgetItem *current);
@@ -64,7 +73,6 @@ private:
                           QPushButton *openButton,
                           const QString &title,
                           const QString &message);
-    void showHelpDialog();
     void showFullImage(EvidenceImageLabel *source, const QString &title);
 
     QPointer<ImageLoader> m_imageLoader;
@@ -82,6 +90,8 @@ private:
     QPushButton *m_selectedOpenButton = nullptr;
     QTableWidget *m_captureTable = nullptr;
     QString m_currentSlotId;
+    QString m_currentEventId;
+    qint64 m_currentSessionId = -1;
     QString m_plateNumber;
     QVector<ParkingCaptureGroup> m_captures;
     QHash<QString, EvidenceImageLabel *> m_requestTargets;

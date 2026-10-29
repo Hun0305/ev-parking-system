@@ -162,6 +162,12 @@ QString RtspVideoItem::frameClockText() const
     return formatKstClock(frameWallClockMs);
 }
 
+QImage RtspVideoItem::currentFrame() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_frame;
+}
+
 void RtspVideoItem::paint(QPainter *painter)
 {
     QImage frame;

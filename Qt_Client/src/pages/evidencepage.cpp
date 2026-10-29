@@ -1,6 +1,7 @@
 #include "evidencepage.h"
 
 #include "api/imageloader.h"
+#include "widgets/pagehelp.h"
 
 #include <QAbstractItemView>
 #include <QColor>
@@ -16,7 +17,6 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QListWidgetItem>
-#include <QPainter>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollArea>
@@ -99,30 +99,6 @@ int slotNumber(const QString &slotId)
     return ok ? number : 0;
 }
 
-QIcon evidenceHelpIcon()
-{
-    constexpr qreal scale = 2.0;
-    QPixmap pixmap(QSize(22, 22) * scale);
-    pixmap.fill(Qt::transparent);
-    pixmap.setDevicePixelRatio(scale);
-
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    const QColor orange(QStringLiteral("#fb8c00"));
-    QPen outline(orange, 1.8);
-    outline.setCapStyle(Qt::RoundCap);
-    painter.setPen(outline);
-    painter.setBrush(Qt::NoBrush);
-    painter.drawEllipse(QRectF(2.5, 2.5, 17.0, 17.0));
-
-    QFont questionFont = painter.font();
-    questionFont.setBold(true);
-    questionFont.setPointSizeF(11.0);
-    painter.setFont(questionFont);
-    painter.drawText(QRectF(0.0, 0.0, 22.0, 21.0),
-                     Qt::AlignCenter, QStringLiteral("?"));
-    return QIcon(pixmap);
-}
 } // namespace
 
 EvidencePage::EvidencePage(QWidget *parent)
@@ -179,18 +155,19 @@ EvidencePage::EvidencePage(QWidget *parent)
     summaryTextLayout->addWidget(m_summaryLabel);
     summaryTextLayout->addWidget(m_statusLabel);
     summaryLayout->addLayout(summaryTextLayout, 1);
-    auto *helpButton = new QPushButton(QStringLiteral("도움말"), summaryFrame);
-    helpButton->setObjectName(QStringLiteral("evidenceHelpButton"));
-    helpButton->setAccessibleName(QStringLiteral("Evidence 도움말"));
-    helpButton->setCursor(Qt::PointingHandCursor);
-    helpButton->setToolTip(QStringLiteral("Evidence 화면 사용 방법 보기"));
-    helpButton->setIcon(evidenceHelpIcon());
-    helpButton->setIconSize(QSize(22, 22));
-    helpButton->setStyleSheet(QStringLiteral(
-        "QPushButton { background:transparent; color:#455a64; border:none; "
-        "border-radius:5px; padding:5px 8px; font-weight:700; }"
-        "QPushButton:hover { background:#fff3e0; color:#e65100; }"
-        "QPushButton:pressed { background:#ffe0b2; }"));
+    auto *helpButton = createPageHelpButton(
+        this, summaryFrame,
+        {QStringLiteral("evidence"), QStringLiteral("Evidence"),
+         QStringLiteral("Evidence 사용 안내"),
+         QStringLiteral("주정차 증거를 확인하는 기본 흐름입니다."),
+         QStringLiteral(
+             "<b>1. 슬롯 선택</b><br>왼쪽 목록에서 확인할 주차 슬롯을 선택합니다.<br><br>"
+             "<b>2. 캡처 비교</b><br><i>First capture</i>와 <i>Latest capture</i>를 비교합니다.<br><br>"
+             "<b>3. 타임라인 확인</b><br>촬영 시간, 사유, OCR 결과와 이미지 종류를 확인합니다.<br><br>"
+             "<b>4. 원본 이미지 열기</b><br><i>Open full image</i>로 원본 크기 사진을 확인합니다."),
+         QStringLiteral(
+             "※ 사진이 표시되지 않으면 서버에 저장된 증거가 없거나 아직 이미지가 전달되지 않은 상태입니다.\n"
+             "   촬영 사유는 서버 metadata가 제공될 때 표시됩니다.")});
     summaryLayout->addWidget(helpButton, 0, Qt::AlignTop);
     contentLayout->addWidget(summaryFrame);
 
@@ -266,8 +243,6 @@ EvidencePage::EvidencePage(QWidget *parent)
             this, &EvidencePage::filterSlots);
     connect(refreshButton, &QPushButton::clicked,
             this, &EvidencePage::requestCurrentEvidence);
-    connect(helpButton, &QPushButton::clicked,
-            this, &EvidencePage::showHelpDialog);
     connect(m_captureTable, &QTableWidget::currentCellChanged, this,
             [this](int currentRow, int, int, int) {
                 renderSelectedCapture(currentRow);
@@ -343,6 +318,7 @@ void EvidencePage::render(const ParkingViewState &state)
     });
 
     const QString previousSlotId = m_currentSlotId;
+    const bool eventNavigationActive = !m_currentEventId.isEmpty();
     QSignalBlocker blocker(m_slotList);
     m_slotList->clear();
     int preferredRow = -1;
@@ -372,14 +348,19 @@ void EvidencePage::render(const ParkingViewState &state)
             fallbackRow = row;
         }
     }
-    if (preferredRow < 0) {
+    if (!eventNavigationActive && preferredRow < 0) {
         preferredRow = fallbackRow >= 0 ? fallbackRow : (rows.isEmpty() ? -1 : 0);
     }
     if (preferredRow >= 0) {
         m_slotList->setCurrentRow(preferredRow);
-        m_currentSlotId = m_slotList->item(preferredRow)->data(Qt::UserRole).toString();
-    } else {
+        if (!eventNavigationActive) {
+            m_currentSlotId = m_slotList->item(preferredRow)
+                                  ->data(Qt::UserRole).toString();
+        }
+    } else if (!eventNavigationActive) {
         m_currentSlotId.clear();
+    } else {
+        m_slotList->setCurrentItem(nullptr);
     }
     filterSlots(m_slotSearch->text());
 }
@@ -416,6 +397,8 @@ void EvidencePage::showLoading(const QString &slotId)
     if (!slotId.isEmpty() && slotId != m_currentSlotId) {
         return;
     }
+    m_currentEventId.clear();
+    m_currentSessionId = -1;
     ++m_requestGeneration;
     m_requestTargets.clear();
     m_captures.clear();
@@ -445,6 +428,97 @@ void EvidencePage::showError(const QString &slotId, const QString &message)
                      QStringLiteral("Evidence request failed"));
 }
 
+void EvidencePage::openEvent(const QString &eventId, const QString &rawSlotId)
+{
+    const QString slotId = normalizeParkingSlotId(rawSlotId);
+    m_currentEventId = eventId.trimmed();
+    m_currentSlotId = slotId;
+    m_currentSessionId = -1;
+
+    QSignalBlocker blocker(m_slotList);
+    m_slotSearch->clear();
+    QListWidgetItem *matchingItem = nullptr;
+    for (int row = 0; row < m_slotList->count(); ++row) {
+        QListWidgetItem *item = m_slotList->item(row);
+        if (item->data(Qt::UserRole).toString() == slotId) {
+            matchingItem = item;
+            break;
+        }
+    }
+    m_slotList->setCurrentItem(matchingItem);
+    if (matchingItem) {
+        m_slotList->scrollToItem(
+            matchingItem, QAbstractItemView::PositionAtCenter);
+    }
+
+    ++m_requestGeneration;
+    m_requestTargets.clear();
+    m_captures.clear();
+    m_captureTable->setRowCount(0);
+    m_summaryLabel->setText(
+        QStringLiteral("Event %1 | %2").arg(m_currentEventId, slotId));
+    m_statusLabel->setText(
+        QStringLiteral("Resolving the parking session recorded by this event..."));
+    clearCaptureCard(m_firstImageLabel, m_firstTitleLabel,
+                     m_firstMetadataLabel, m_firstOpenButton,
+                     QStringLiteral("First capture"), QStringLiteral("Loading..."));
+    clearCaptureCard(m_selectedImageLabel, m_selectedTitleLabel,
+                     m_selectedMetadataLabel, m_selectedOpenButton,
+                     QStringLiteral("Latest capture"), QStringLiteral("Loading..."));
+}
+
+void EvidencePage::showEventEvidence(
+    const QString &eventId,
+    const QString &slotId,
+    qint64 sessionId,
+    SlotState state,
+    const QString &plateNumber,
+    const QList<ParkingImageResource> &images)
+{
+    if (eventId != m_currentEventId) {
+        return;
+    }
+    m_currentSessionId = sessionId;
+    showEvidence(slotId, state, plateNumber, images);
+    m_currentEventId = eventId;
+    m_summaryLabel->setText(
+        QStringLiteral("Event %1 | %2 | Session %3 | %4 | Plate: %5")
+            .arg(eventId, slotId,
+                 sessionId > 0 ? QString::number(sessionId)
+                               : QStringLiteral("legacy"),
+                 slotStateText(state),
+                 plateNumber.isEmpty() ? QStringLiteral("-") : plateNumber));
+    m_statusLabel->setText(
+        m_captures.isEmpty()
+            ? QStringLiteral("No evidence images are stored for this event session.")
+            : QStringLiteral(
+                  "%1 capture%2 loaded from the event session. Select a timeline row to compare it with the first capture.")
+                  .arg(m_captures.size())
+                  .arg(m_captures.size() == 1 ? QString()
+                                              : QStringLiteral("s")));
+}
+
+void EvidencePage::showEventError(const QString &eventId,
+                                  const QString &slotId,
+                                  const QString &message)
+{
+    if (eventId != m_currentEventId) {
+        return;
+    }
+    m_summaryLabel->setText(
+        QStringLiteral("Event %1 | %2").arg(eventId, slotId));
+    m_statusLabel->setText(
+        QStringLiteral("Could not load event evidence: %1").arg(message));
+    clearCaptureCard(m_firstImageLabel, m_firstTitleLabel,
+                     m_firstMetadataLabel, m_firstOpenButton,
+                     QStringLiteral("First capture"),
+                     QStringLiteral("Event evidence request failed"));
+    clearCaptureCard(m_selectedImageLabel, m_selectedTitleLabel,
+                     m_selectedMetadataLabel, m_selectedOpenButton,
+                     QStringLiteral("Latest capture"),
+                     QStringLiteral("Event evidence request failed"));
+}
+
 bool EvidencePage::selectSlot(const QString &rawSlotId)
 {
     const QString slotId = normalizeParkingSlotId(rawSlotId);
@@ -460,6 +534,8 @@ bool EvidencePage::selectSlot(const QString &rawSlotId)
         }
 
         const bool selectionChanged = m_slotList->currentItem() != item;
+        m_currentEventId.clear();
+        m_currentSessionId = -1;
         m_slotList->setCurrentItem(item);
         m_slotList->scrollToItem(item, QAbstractItemView::PositionAtCenter);
         if (!selectionChanged) {
@@ -476,6 +552,11 @@ QString EvidencePage::currentSlotId() const
     return m_currentSlotId;
 }
 
+QString EvidencePage::currentEventId() const
+{
+    return m_currentEventId;
+}
+
 int EvidencePage::captureCount() const
 {
     return m_captures.size();
@@ -483,12 +564,17 @@ int EvidencePage::captureCount() const
 
 void EvidencePage::requestCurrentEvidence()
 {
+    if (!m_currentEventId.isEmpty()) {
+        openEvent(m_currentEventId, m_currentSlotId);
+        emit eventEvidenceRequested(m_currentEventId);
+        return;
+    }
     if (m_currentSlotId.isEmpty()) {
         m_statusLabel->setText(QStringLiteral("No parking slot is available."));
         return;
     }
     showLoading(m_currentSlotId);
-    emit evidenceRequested(m_currentSlotId);
+    emit slotEvidenceRequested(m_currentSlotId);
 }
 
 void EvidencePage::handleSlotChanged(QListWidgetItem *current)
@@ -496,6 +582,8 @@ void EvidencePage::handleSlotChanged(QListWidgetItem *current)
     if (!current) {
         return;
     }
+    m_currentEventId.clear();
+    m_currentSessionId = -1;
     m_currentSlotId = current->data(Qt::UserRole).toString();
     requestCurrentEvidence();
 }
@@ -640,76 +728,6 @@ void EvidencePage::clearCaptureCard(
     titleLabel->setText(title);
     metadataLabel->setText(QStringLiteral("No capture metadata"));
     openButton->setEnabled(false);
-}
-
-void EvidencePage::showHelpDialog()
-{
-    if (QDialog *existing = findChild<QDialog *>(
-            QStringLiteral("evidenceHelpDialog"))) {
-        existing->raise();
-        existing->activateWindow();
-        return;
-    }
-
-    auto *dialog = new QDialog(this);
-    dialog->setObjectName(QStringLiteral("evidenceHelpDialog"));
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->setWindowTitle(QStringLiteral("Evidence 사용 안내"));
-    dialog->setModal(true);
-    dialog->setMinimumWidth(560);
-
-    auto *layout = new QVBoxLayout(dialog);
-    layout->setContentsMargins(22, 20, 22, 18);
-    layout->setSpacing(14);
-
-    auto *titleLabel = new QLabel(QStringLiteral("Evidence 사용 안내"), dialog);
-    titleLabel->setObjectName(QStringLiteral("evidenceHelpTitle"));
-    titleLabel->setStyleSheet(QStringLiteral(
-        "font-size:20px;font-weight:800;color:#263238;"));
-    layout->addWidget(titleLabel);
-
-    auto *introLabel = new QLabel(
-        QStringLiteral("주정차 증거를 확인하는 기본 흐름입니다."), dialog);
-    introLabel->setStyleSheet(QStringLiteral("color:#546e7a;"));
-    layout->addWidget(introLabel);
-
-    auto *stepsFrame = new QFrame(dialog);
-    stepsFrame->setStyleSheet(QStringLiteral(
-        "QFrame { background:#f7f9fa; border:1px solid #d9e0e5; "
-        "border-radius:7px; }"));
-    auto *stepsLayout = new QVBoxLayout(stepsFrame);
-    stepsLayout->setContentsMargins(16, 14, 16, 14);
-    auto *stepsLabel = new QLabel(stepsFrame);
-    stepsLabel->setObjectName(QStringLiteral("evidenceHelpSteps"));
-    stepsLabel->setTextFormat(Qt::RichText);
-    stepsLabel->setWordWrap(true);
-    stepsLabel->setStyleSheet(QStringLiteral(
-        "border:none;color:#263238;line-height:145%;"));
-    stepsLabel->setText(QStringLiteral(
-        "<b>1. 슬롯 선택</b><br>왼쪽 목록에서 확인할 주차 슬롯을 선택합니다.<br><br>"
-        "<b>2. 캡처 비교</b><br><i>First capture</i>와 <i>Latest capture</i>를 비교합니다.<br><br>"
-        "<b>3. 타임라인 확인</b><br>촬영 시간, 사유, OCR 결과와 이미지 종류를 확인합니다.<br><br>"
-        "<b>4. 원본 이미지 열기</b><br><i>Open full image</i>로 원본 크기 사진을 확인합니다."));
-    stepsLayout->addWidget(stepsLabel);
-    layout->addWidget(stepsFrame);
-
-    auto *noteLabel = new QLabel(
-        QStringLiteral("※ 사진이 표시되지 않으면 서버에 저장된 증거가 없거나 아직 이미지가 전달되지 않은 상태입니다.\n"
-                       "   촬영 사유는 서버 metadata가 제공될 때 표시됩니다."),
-        dialog);
-    noteLabel->setObjectName(QStringLiteral("evidenceHelpNote"));
-    noteLabel->setWordWrap(true);
-    noteLabel->setStyleSheet(QStringLiteral(
-        "background:#fff8e1;color:#5d4037;border:1px solid #ffe082;"
-        "border-radius:6px;padding:10px;"));
-    layout->addWidget(noteLabel);
-
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
-    buttons->setObjectName(QStringLiteral("evidenceHelpButtons"));
-    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
-    layout->addWidget(buttons);
-
-    dialog->open();
 }
 
 void EvidencePage::showFullImage(EvidenceImageLabel *source, const QString &title)

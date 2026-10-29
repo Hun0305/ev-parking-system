@@ -4,11 +4,14 @@
 #include <QApplication>
 #include <QDialog>
 #include <QFile>
+#include <QFrame>
 #include <QGraphicsSimpleTextItem>
 #include <QGraphicsView>
+#include <QGroupBox>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLabel>
 #include <QMetaObject>
 #include <QPushButton>
 #include <QTemporaryDir>
@@ -130,6 +133,41 @@ int main(int argc, char **argv)
     if (versionOnePage.hasUnsavedLayoutChanges()) return 43;
     if (versionOnePage.channelDisplayName(QStringLiteral("CH1")) != QStringLiteral("CH1")) return 44;
     if (!sceneHasText(versionOnePage, QStringLiteral("CH1 | IVA1-IVA4"))) return 45;
+
+    QPushButton *helpButton = page.findChild<QPushButton *>(
+        QStringLiteral("parkingMapHelpButton"));
+    if (!helpButton || helpButton->icon().isNull()
+        || helpButton->text() != QStringLiteral("Parking Map 안내")) return 46;
+    helpButton->click();
+    QApplication::processEvents();
+    QDialog *helpDialog = page.findChild<QDialog *>(
+        QStringLiteral("parkingMapHelpDialog"));
+    QWidget *miniMap = helpDialog
+        ? helpDialog->findChild<QWidget *>(QStringLiteral("parkingMapHelpMiniMap"))
+        : nullptr;
+    QWidget *stateLegend = helpDialog
+        ? helpDialog->findChild<QWidget *>(QStringLiteral("parkingMapHelpStateLegend"))
+        : nullptr;
+    QWidget *editFlow = helpDialog
+        ? helpDialog->findChild<QWidget *>(QStringLiteral("parkingMapHelpEditFlow"))
+        : nullptr;
+    QWidget *slotTools = helpDialog
+        ? helpDialog->findChild<QWidget *>(QStringLiteral("parkingMapHelpSlotTools"))
+        : nullptr;
+    QGroupBox *saveActions = helpDialog
+        ? helpDialog->findChild<QGroupBox *>(QStringLiteral("parkingMapHelpSaveActions"))
+        : nullptr;
+    QLabel *safetyNotes = helpDialog
+        ? helpDialog->findChild<QLabel *>(QStringLiteral("parkingMapHelpSafetyNotes"))
+        : nullptr;
+    if (!helpDialog || !miniMap || !stateLegend || !editFlow || !slotTools
+        || !saveActions || !safetyNotes
+        || miniMap->findChildren<QFrame *>().size() < 4
+        || stateLegend->findChildren<QFrame *>().size() < 7
+        || editFlow->findChildren<QFrame *>().size() < 4
+        || slotTools->findChildren<QFrame *>().size() < 3
+        || !safetyNotes->text().contains(QStringLiteral("slot_id"))) return 47;
+    helpDialog->close();
 
     return 0;
 }

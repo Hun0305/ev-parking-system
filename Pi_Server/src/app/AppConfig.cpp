@@ -1,9 +1,11 @@
 #include "app/AppConfig.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <filesystem>
 #include <sstream>
 
 namespace {
@@ -18,6 +20,23 @@ std::string getEnvOrDefault(const char* key, const std::string& default_value) {
     return std::string(value);
 }
 
+std::string resolveProjectPath(const char* key, const std::string& default_value) {
+    const std::string configured = getEnvOrDefault(key, default_value);
+    if (configured.empty() || std::filesystem::path(configured).is_absolute()) {
+        return configured;
+    }
+
+    const std::string root = getEnvOrDefault("PI_SERVER_ROOT", "");
+    if (root.empty()) return configured;
+    return (std::filesystem::path(root) / configured).lexically_normal().string();
+}
+
+std::string localSettingPath(const char* file_name) {
+    const std::string env_dir = getEnvOrDefault("PI_SERVER_ENV_DIR", "");
+    if (env_dir.empty()) return file_name;
+    return (std::filesystem::path(env_dir) / file_name).string();
+}
+
 std::string trim(std::string value) {
     const std::size_t first = value.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) return "";
@@ -25,7 +44,8 @@ std::string trim(std::string value) {
     return value.substr(first, last - first + 1);
 }
 
-// Gemini 비밀파일은 shell을 거치지 않고도 서버가 직접 읽을 수 있게 한다.
+// run_server.sh 로 실행하지 않을 때(systemd 등)도 서버가 설정 파일을 직접
+// 읽을 수 있게 한다. 공개 설정은 .env.public, 계정/키는 .env.private 이다.
 // 환경변수가 있으면 파일보다 우선하며, 단순 KEY='VALUE' 형식만 허용한다.
 std::string getEnvOrLocalSetting(const char* key,
                                  const std::string& default_value,
@@ -73,9 +93,30 @@ bool getEnvBoolOrDefault(const char* key, bool default_value) {
     return default_value;
 }
 
-double getEnvDoubleOrDefault(const char* key, double default_value) {
-    const char* value = std::getenv(key);
-    if (value == nullptr || std::string(value).empty()) return default_value;
+bool getEnvOrLocalBoolOrDefault(const char* key,
+                                bool default_value,
+                                const std::string& path) {
+    const std::string value = trim(getEnvOrLocalSetting(
+        key, default_value ? "true" : "false", path));
+    if (value == "1" || value == "true" || value == "TRUE" || value == "on") return true;
+    if (value == "0" || value == "false" || value == "FALSE" || value == "off") return false;
+    return default_value;
+}
+
+int getEnvOrLocalIntOrDefault(const char* key,
+                              int default_value,
+                              const std::string& path) {
+    const std::string value = getEnvOrLocalSetting(key, "", path);
+    if (value.empty()) return default_value;
+    try {
+        return std::stoi(value);
+    } catch (...) {
+        return default_value;
+    }
+}
+
+double parseDoubleOrDefault(const std::string& value, double default_value) {
+    if (value.empty()) return default_value;
     try {
         return std::stod(value);
     } catch (...) {
@@ -101,8 +142,10 @@ AppConfig AppConfig::loadFromEnv() {
         getEnvBoolOrDefault("HALL_MQTT_INPUT_ENABLED", true);
     config.hall_mqtt_topic =
         getEnvOrDefault("HALL_MQTT_TOPIC", "parking/sensor/hall");
-    config.parking_slot_config_path =
-        getEnvOrDefault("PARKING_SLOT_CONFIG", "config/parking_slots.json");
+    const std::string legacy_slot_config =
+        getEnvOrDefault("PARKING_SLOTS_CONFIG", "config/parking_slots.json");
+    config.parking_slot_config_path = resolveProjectPath(
+        "PARKING_SLOT_CONFIG", legacy_slot_config);
     config.sensor_link_mode = getEnvOrDefault("SENSOR_LINK_MODE", "off");
     config.sensor_uart_device =
         getEnvOrDefault("SENSOR_UART_DEVICE", "/dev/ttyAMA0");
@@ -113,7 +156,23 @@ AppConfig AppConfig::loadFromEnv() {
     config.sensor_uart_reconnect_ms =
         std::max(1, getEnvIntOrDefault("SENSOR_UART_RECONNECT_MS", 1000));
     config.parking_occupancy_confirm_ms =
-        std::max(0, getEnvIntOrDefault("PARKING_OCCUPANCY_CONFIRM_MS", 0));
+        std::max(0, getEnvIntOrDefault("PARKING_OCCUPANCY_CONFIRM_MS", 5000));
+    config.parking_occupancy_source =
+        getEnvOrDefault("PARKING_OCCUPANCY_SOURCE", "HALL");
+    std::transform(config.parking_occupancy_source.begin(),
+                   config.parking_occupancy_source.end(),
+                   config.parking_occupancy_source.begin(),
+                   [](const unsigned char value) {
+                       return static_cast<char>(std::toupper(value));
+                   });
+    if (config.parking_occupancy_source != "HALL" &&
+        config.parking_occupancy_source != "CAMERA_IVA" &&
+        config.parking_occupancy_source != "HYBRID_OR") {
+        config.parking_occupancy_source = "HALL";
+    }
+    config.camera_iva_exit_confirm_ms = std::clamp(
+        getEnvIntOrDefault("CAMERA_IVA_EXIT_CONFIRM_MS", 20000),
+        1000, 60000);
     config.capture_sched_enabled =
         getEnvBoolOrDefault("CAPTURE_SCHED_ENABLED", false);
     config.capture_topic_prefix =
@@ -130,18 +189,26 @@ AppConfig AppConfig::loadFromEnv() {
         getEnvOrDefault("CAPTURE_OFFSETS_SEC", "30,60");
     config.capture_ocr_max_attempts =
         std::clamp(getEnvIntOrDefault("CAPTURE_OCR_MAX_ATTEMPTS", 2), 1, 2);
+    config.plate_led_enabled =
+        getEnvBoolOrDefault("PLATE_LED_ENABLED", false);
+    config.plate_led_night_start_hour =
+        std::clamp(getEnvIntOrDefault("PLATE_LED_NIGHT_START_HOUR", 19), 0, 23);
+    config.plate_led_night_end_hour =
+        std::clamp(getEnvIntOrDefault("PLATE_LED_NIGHT_END_HOUR", 6), 0, 23);
+    config.plate_led_settle_ms =
+        std::clamp(getEnvIntOrDefault("PLATE_LED_SETTLE_MS", 200), 0, 2000);
     config.camera_snapshot_api_enabled =
         getEnvBoolOrDefault("CAMERA_SNAPSHOT_API_ENABLED", false);
     config.camera_snapshot_api_rtsp_fallback =
         getEnvBoolOrDefault("CAMERA_SNAPSHOT_API_RTSP_FALLBACK", false);
-    config.camera_open_api_base =
-        getEnvOrDefault("CAMERA_OPEN_API_BASE", "");
-    config.camera_image_base =
-        getEnvOrDefault("CAMERA_IMAGE_BASE", "");
+    config.camera_open_api_base = getEnvOrLocalSetting(
+        "CAMERA_OPEN_API_BASE", "", localSettingPath(".env.private"));
+    config.camera_image_base = getEnvOrLocalSetting(
+        "CAMERA_IMAGE_BASE", "", localSettingPath(".env.private"));
     config.camera_api_username = getEnvOrLocalSetting(
-        "CAMERA_API_USERNAME", "", ".env.camera.local");
+        "CAMERA_API_USERNAME", "", localSettingPath(".env.private"));
     config.camera_api_password = getEnvOrLocalSetting(
-        "CAMERA_API_PASSWORD", "", ".env.camera.local");
+        "CAMERA_API_PASSWORD", "", localSettingPath(".env.private"));
     config.camera_image_server_port = std::clamp(
         getEnvIntOrDefault("CAMERA_IMAGE_SERVER_PORT", 8080), 1024, 65535);
     config.camera_snapshot_connect_timeout_ms = std::max(
@@ -154,6 +221,8 @@ AppConfig AppConfig::loadFromEnv() {
         getEnvIntOrDefault("CAMERA_SNAPSHOT_MAX_RETRIES", 2), 0, 5);
     config.camera_snapshot_retry_delay_ms = std::max(
         1, getEnvIntOrDefault("CAMERA_SNAPSHOT_RETRY_DELAY_MS", 250));
+    config.bestshot_enabled =
+        getEnvBoolOrDefault("BESTSHOT_ENABLED", false);
 
     config.fire_alarm_enabled = getEnvBoolOrDefault("FIRE_ALARM_ENABLED", false);
     config.fire_uart_device = getEnvOrDefault("FIRE_UART_DEVICE", "/dev/ttyAMA0");
@@ -172,21 +241,22 @@ AppConfig AppConfig::loadFromEnv() {
     config.parking_hall_enabled =
         getEnvBoolOrDefault("PARKING_HALL_ENABLED", false);
     config.parking_slots_config_path =
-        getEnvOrDefault("PARKING_SLOTS_CONFIG", "config/parking_slots.json");
+        config.parking_slot_config_path;
     config.parking_hall_work_queue_capacity = std::max(
         1, getEnvIntOrDefault("PARKING_HALL_WORK_QUEUE_CAPACITY", 100));
 
     config.snapshot_dir = getEnvOrDefault("SNAPSHOT_DIR", "data/snapshots");
-    config.db_path = getEnvOrDefault("EVENT_DB_PATH", "data/db/parking.db");
+    config.snapshot_dir = resolveProjectPath("SNAPSHOT_DIR", config.snapshot_dir);
+    config.db_path = resolveProjectPath("EVENT_DB_PATH", "data/db/parking.db");
     config.gemini_api_key =
-        getEnvOrLocalSetting("GEMINI_API_KEY", "", ".env.gemini.local");
+        getEnvOrLocalSetting("GEMINI_API_KEY", "", localSettingPath(".env.private"));
     config.gemini_model = getEnvOrLocalSetting(
-        "GEMINI_MODEL", "gemini-3-flash-preview", ".env.gemini.local");
+        "GEMINI_MODEL", "gemini-3-flash-preview", localSettingPath(".env.public"));
     config.gemini_fallback_model = getEnvOrLocalSetting(
         "GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite-preview",
-        ".env.gemini.local");
+        localSettingPath(".env.public"));
     config.plate_preprocess_mode = getEnvOrLocalSetting(
-        "PLATE_PREPROCESS_MODE", "pipeline", ".env.gemini.local");
+        "PLATE_PREPROCESS_MODE", "pipeline", localSettingPath(".env.public"));
 
     config.preview_width = getEnvIntOrDefault("PREVIEW_WIDTH", 640);
     config.preview_height = getEnvIntOrDefault("PREVIEW_HEIGHT", 360);
@@ -204,21 +274,45 @@ AppConfig AppConfig::loadFromEnv() {
         getEnvIntOrDefault("GEMINI_CONNECT_TIMEOUT_SEC", 5);
     config.gemini_request_timeout_sec =
         getEnvIntOrDefault("GEMINI_REQUEST_TIMEOUT_SEC", 30);
+    config.telegram_enabled = getEnvOrLocalBoolOrDefault(
+        "TELEGRAM_ENABLED", false, localSettingPath(".env.public"));
+    config.telegram_bot_token = getEnvOrLocalSetting(
+        "TELEGRAM_BOT_TOKEN", "", localSettingPath(".env.private"));
+    config.telegram_channel = getEnvOrLocalSetting(
+        "TELEGRAM_CHANNEL", "", localSettingPath(".env.private"));
+    config.telegram_connect_timeout_ms = std::max(
+        1, getEnvOrLocalIntOrDefault("TELEGRAM_CONNECT_TIMEOUT_MS", 3000,
+                                     localSettingPath(".env.public")));
+    config.telegram_request_timeout_ms = std::max(
+        1, getEnvOrLocalIntOrDefault("TELEGRAM_REQUEST_TIMEOUT_MS", 10000,
+                                     localSettingPath(".env.public")));
+    config.telegram_retry_count = std::max(
+        0, getEnvOrLocalIntOrDefault("TELEGRAM_RETRY_COUNT", 2,
+                                     localSettingPath(".env.public")));
+    config.telegram_retry_delay_ms = std::max(
+        1, getEnvOrLocalIntOrDefault("TELEGRAM_RETRY_DELAY_MS", 500,
+                                     localSettingPath(".env.public")));
+    config.telegram_queue_capacity = std::max(
+        1, getEnvOrLocalIntOrDefault("TELEGRAM_QUEUE_CAPACITY", 256,
+                                     localSettingPath(".env.public")));
 
     config.parking_timer_enabled =
         getEnvBoolOrDefault("PARKING_TIMER_ENABLED", true);
-    config.parking_timeout_seconds =
-        std::max(1, getEnvIntOrDefault("PARKING_TIMEOUT_SECONDS", 3600));
-    config.parking_overstay_evidence_delay_seconds = std::max(
-        1, getEnvIntOrDefault(
-               "PARKING_OVERSTAY_EVIDENCE_DELAY_SECONDS", 3600));
+    // 새 단일 설정이 없을 때만 기존 PARKING_TIMEOUT_SECONDS를 시작 기본값으로
+    // 받아 이전 배포 설정과 호환한다. 이후 REST 변경값은 SQLite가 우선한다.
+    config.parking_overstay_threshold_seconds = std::clamp(
+        getEnvIntOrDefault("PARKING_OVERSTAY_THRESHOLD_SECONDS",
+            getEnvIntOrDefault("PARKING_TIMEOUT_SECONDS", 3600)),
+        60, 86400);
 
     config.http_api_enabled = getEnvBoolOrDefault("HTTP_API_ENABLED", true);
     config.http_listen_address = getEnvOrDefault("HTTP_LISTEN_ADDRESS", "0.0.0.0");
     config.http_port = getEnvIntOrDefault("HTTP_PORT", 8080);
-    config.http_tls_certificate_path = getEnvOrDefault("HTTP_TLS_CERT_PATH", "");
-    config.http_tls_private_key_path = getEnvOrDefault("HTTP_TLS_KEY_PATH", "");
-    config.http_data_root = getEnvOrDefault("HTTP_DATA_ROOT", "data");
+    config.http_tls_certificate_path = resolveProjectPath(
+        "HTTP_TLS_CERT_PATH", "");
+    config.http_tls_private_key_path = resolveProjectPath(
+        "HTTP_TLS_KEY_PATH", "");
+    config.http_data_root = resolveProjectPath("HTTP_DATA_ROOT", "data");
     config.http_max_image_mb = getEnvIntOrDefault("HTTP_MAX_IMAGE_MB", 10);
 
     for (int i = 1; i <= 4; ++i) {
@@ -245,7 +339,8 @@ AppConfig AppConfig::loadFromEnv() {
     }
 
     // EV01~EV04는 카메라 웹 설정의 IVA Area 이름과 동일하게 두는 것이 기본이다.
-    // ROI 미설정 시 전체 프레임(0,0,1,1)을 사용해 이벤트 사진을 놓치지 않는다.
+    // ROI 네 값이 전혀 없으면 좌표는 "미설정"으로 유지한다. SQLite에 Qt가
+    // 저장한 값이 있으면 ParkingRoiSettingsService가 그것을 우선 복원한다.
     for (int i = 1; i <= 4; ++i) {
         std::ostringstream slot;
         slot << "EV" << std::setw(2) << std::setfill('0') << i;
@@ -253,19 +348,32 @@ AppConfig AppConfig::loadFromEnv() {
         // 향후 채널 확장 시 IVA_EVxx_CHANNEL_ID로 슬롯별 override한다.
         const std::string channel = "ch01";
         const std::string prefix = "IVA_" + slot.str() + "_";
+        const std::string public_env_path = localSettingPath(".env.public");
+        const std::string roi_x = getEnvOrLocalSetting(
+            (prefix + "ROI_X").c_str(), "", public_env_path);
+        const std::string roi_y = getEnvOrLocalSetting(
+            (prefix + "ROI_Y").c_str(), "", public_env_path);
+        const std::string roi_width = getEnvOrLocalSetting(
+            (prefix + "ROI_WIDTH").c_str(), "", public_env_path);
+        const std::string roi_height = getEnvOrLocalSetting(
+            (prefix + "ROI_HEIGHT").c_str(), "", public_env_path);
+        const bool roi_configured =
+            !roi_x.empty() || !roi_y.empty() ||
+            !roi_width.empty() || !roi_height.empty();
 
         config.iva_areas.push_back({
             slot.str(),
             getEnvOrLocalSetting((prefix + "AREA_NAME").c_str(), slot.str(),
-                                 ".env.iva.local"),
+                                 public_env_path),
             getEnvOrLocalSetting((prefix + "CHANNEL_ID").c_str(), channel,
-                                 ".env.iva.local"),
-            getEnvDoubleOrDefault((prefix + "ROI_X").c_str(), 0.0),
-            getEnvDoubleOrDefault((prefix + "ROI_Y").c_str(), 0.0),
-            getEnvDoubleOrDefault((prefix + "ROI_WIDTH").c_str(), 1.0),
-            getEnvDoubleOrDefault((prefix + "ROI_HEIGHT").c_str(), 1.0),
+                                 public_env_path),
+            parseDoubleOrDefault(roi_x, 0.0),
+            parseDoubleOrDefault(roi_y, 0.0),
+            parseDoubleOrDefault(roi_width, 1.0),
+            parseDoubleOrDefault(roi_height, 1.0),
             std::max(0, getEnvIntOrDefault(
-                (prefix + "SNAPSHOT_API_CHANNEL").c_str(), 0))
+                (prefix + "SNAPSHOT_API_CHANNEL").c_str(), 0)),
+            roi_configured
         });
     }
 

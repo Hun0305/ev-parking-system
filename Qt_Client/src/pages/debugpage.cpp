@@ -1,5 +1,7 @@
 #include "debugpage.h"
 
+#include "widgets/pagehelp.h"
+
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
@@ -88,6 +90,19 @@ DebugPage::DebugPage(QWidget *parent)
     tabs->addTab(createOverviewTab(), QStringLiteral("Overview"));
     tabs->addTab(createLogsTab(), QStringLiteral("Live Logs"));
     tabs->addTab(createTestToolsTab(), QStringLiteral("Test Tools"));
+    tabs->setCornerWidget(createPageHelpButton(
+        this, tabs,
+        {QStringLiteral("debug"), QStringLiteral("Debug"),
+         QStringLiteral("Debug 사용 안내"),
+         QStringLiteral("Pi API, RTSP, 주차 데이터의 상태를 진단하고 로컬 테스트 시나리오를 실행합니다."),
+         QStringLiteral(
+             "<b>1. Overview</b><br>Runtime data, Pi API, RTSP streams, Parking state 카드와 상세 표에서 연결 상태·지연·마지막 오류를 확인합니다. <i>Reconnect now</i>로 API 재연결을 요청할 수 있습니다.<br><br>"
+             "<b>2. Live Logs</b><br>Level, Module과 검색어로 진단 로그를 필터링합니다. <i>Clear view</i>는 현재 Qt 로그 화면을 비웁니다.<br><br>"
+             "<b>3. Test Tools</b><br>알람 ACK, mock EV, 위반·초과주차·센서 오류, 랜덤 상태와 normalized RX sample을 로컬 Qt 상태에 적용합니다.<br><br>"
+             "<b>4. Manual message</b><br><i>RX message</i>에 정규화 메시지를 입력하고 <i>Inject locally</i>로 parser와 화면 반영을 시험합니다."),
+         QStringLiteral(
+             "※ Test Tools와 Inject locally는 Pi 서버로 전송되지 않는 로컬 simulation sandbox입니다. 실제 장비 통합 성공 증거로 사용하지 마세요.\n"
+             "   시뮬레이션 후 Runtime data가 MIXED로 표시될 수 있습니다.")}));
     layout->addWidget(tabs);
 
     m_ageRefreshTimer = new QTimer(this);

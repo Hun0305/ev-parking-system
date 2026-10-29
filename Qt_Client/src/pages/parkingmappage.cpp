@@ -1,5 +1,7 @@
 #include "parkingmappage.h"
 
+#include "widgets/pagehelp.h"
+
 #include <QAbstractItemView>
 #include <QCheckBox>
 #include <QComboBox>
@@ -13,6 +15,7 @@
 #include <QFont>
 #include <QFontMetrics>
 #include <QFormLayout>
+#include <QFrame>
 #include <QGraphicsItem>
 #include <QGraphicsEllipseItem>
 #include <QGraphicsPathItem>
@@ -41,10 +44,12 @@
 #include <QPolygonF>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QScrollArea>
 #include <QScrollBar>
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QSpinBox>
 #include <QStringList>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -518,8 +523,25 @@ ParkingMapPage::ParkingMapPage(const QString &layoutPath, QWidget *parent)
     toolbarLayout->addWidget(reloadButton);
     toolbarLayout->addWidget(resetButton);
     toolbarLayout->addStretch();
-    toolbarLayout->addWidget(m_layoutStatusLabel);
     mapLayout->addLayout(toolbarLayout);
+
+    auto *statusLayout = new QHBoxLayout;
+    statusLayout->addWidget(m_layoutStatusLabel);
+    statusLayout->addStretch();
+    auto *helpButton = new QPushButton(QStringLiteral("Parking Map 안내"), mapGroup);
+    helpButton->setObjectName(QStringLiteral("parkingMapHelpButton"));
+    helpButton->setAccessibleName(QStringLiteral("Parking Map 운영 및 편집 안내"));
+    helpButton->setToolTip(QStringLiteral("슬롯 상태 판독과 배치 편집 방법 보기"));
+    helpButton->setCursor(Qt::PointingHandCursor);
+    helpButton->setIcon(pageHelpIcon());
+    helpButton->setIconSize(QSize(22, 22));
+    helpButton->setStyleSheet(QStringLiteral(
+        "QPushButton { background:#263238; color:white; border:1px solid #455a64; "
+        "border-radius:6px; padding:6px 11px; font-weight:800; }"
+        "QPushButton:hover { background:#37474f; border-color:#fb8c00; }"
+        "QPushButton:pressed { background:#1c252a; }"));
+    statusLayout->addWidget(helpButton);
+    mapLayout->addLayout(statusLayout);
 
     m_scene = new QGraphicsScene(0, 0, 920, 560, this);
     m_scene->setBackgroundBrush(QColor(QStringLiteral("#1b1f23")));
@@ -697,6 +719,7 @@ ParkingMapPage::ParkingMapPage(const QString &layoutPath, QWidget *parent)
     m_xSpin = makeSpin(3000.0, 5.0);
     m_ySpin = makeSpin(3000.0, 5.0);
     auto makeSliderControl = [editorGroup](QSlider **slider, QLabel **valueLabel,
+                                           QSpinBox **valueSpin,
                                            int minimum, int maximum, int step) {
         auto *container = new QWidget(editorGroup);
         auto *layout = new QHBoxLayout(container);
@@ -708,19 +731,34 @@ ParkingMapPage::ParkingMapPage(const QString &layoutPath, QWidget *parent)
         createdSlider->setPageStep(step * 4);
         createdSlider->setTickPosition(QSlider::TicksBelow);
         createdSlider->setTickInterval(step * 4);
-        auto *createdLabel = new QLabel(container);
-        createdLabel->setMinimumWidth(42);
-        createdLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        createdLabel->setStyleSheet(QStringLiteral("color: #455a64; font-weight: 700;"));
         layout->addWidget(createdSlider, 1);
-        layout->addWidget(createdLabel);
+        if (valueSpin) {
+            auto *createdSpin = new QSpinBox(container);
+            createdSpin->setRange(minimum, maximum);
+            createdSpin->setSingleStep(step);
+            createdSpin->setSuffix(QStringLiteral(" px"));
+            createdSpin->setMinimumWidth(92);
+            layout->addWidget(createdSpin);
+            *valueSpin = createdSpin;
+        } else {
+            auto *createdLabel = new QLabel(container);
+            createdLabel->setMinimumWidth(56);
+            createdLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            createdLabel->setStyleSheet(QStringLiteral("color: #455a64; font-weight: 700;"));
+            layout->addWidget(createdLabel);
+            *valueLabel = createdLabel;
+        }
         *slider = createdSlider;
-        *valueLabel = createdLabel;
         return container;
     };
-    QWidget *widthControl = makeSliderControl(&m_widthSlider, &m_widthValueLabel, 16, 420, 4);
-    QWidget *heightControl = makeSliderControl(&m_heightSlider, &m_heightValueLabel, 16, 220, 4);
-    QWidget *rotationControl = makeSliderControl(&m_rotationSlider, &m_rotationValueLabel, -180, 180, 5);
+    QWidget *widthControl = makeSliderControl(&m_widthSlider, &m_widthValueLabel,
+                                              &m_widthSpin, 16, 420, 1);
+    QWidget *heightControl = makeSliderControl(&m_heightSlider, &m_heightValueLabel,
+                                               &m_heightSpin, 16, 220, 1);
+    QWidget *rotationControl = makeSliderControl(&m_rotationSlider, &m_rotationValueLabel,
+                                                 nullptr, -180, 180, 5);
+    m_widthSpin->setObjectName(QStringLiteral("parkingZoneWidthSpin"));
+    m_heightSpin->setObjectName(QStringLiteral("parkingZoneHeightSpin"));
     m_deleteButton = new QPushButton(QStringLiteral("Delete zone"), editorGroup);
     editorLayout->addRow(QStringLiteral("Zone ID"), m_zoneIdEdit);
     editorLayout->addRow(QStringLiteral("Display"), m_displayNameEdit);
@@ -760,6 +798,8 @@ ParkingMapPage::ParkingMapPage(const QString &layoutPath, QWidget *parent)
             this, &ParkingMapPage::resetDefaultLayout);
     connect(m_deleteButton, &QPushButton::clicked,
             this, &ParkingMapPage::deleteSelectedZone);
+    connect(helpButton, &QPushButton::clicked,
+            this, &ParkingMapPage::showHelpDialog);
 
     const QList<QLineEdit *> lineEdits = {m_zoneIdEdit, m_displayNameEdit, m_hallSensorEdit};
     for (QLineEdit *edit : lineEdits) {
@@ -783,6 +823,20 @@ ParkingMapPage::ParkingMapPage(const QString &layoutPath, QWidget *parent)
             applyEditorFields();
         });
     }
+    connect(m_widthSpin, qOverload<int>(&QSpinBox::valueChanged),
+            this, [this](int value) {
+        if (m_updatingEditor) return;
+        QSignalBlocker blocker(m_widthSlider);
+        m_widthSlider->setValue(value);
+        applyEditorFields();
+    });
+    connect(m_heightSpin, qOverload<int>(&QSpinBox::valueChanged),
+            this, [this](int value) {
+        if (m_updatingEditor) return;
+        QSignalBlocker blocker(m_heightSlider);
+        m_heightSlider->setValue(value);
+        applyEditorFields();
+    });
 
     loadLayout();
     rebuildScene();
@@ -790,6 +844,285 @@ ParkingMapPage::ParkingMapPage(const QString &layoutPath, QWidget *parent)
     updateEditorFromSelection();
     scrollMapToOrigin();
     QTimer::singleShot(0, this, &ParkingMapPage::scrollMapToOrigin);
+}
+
+void ParkingMapPage::showHelpDialog()
+{
+    if (QDialog *existing = findChild<QDialog *>(
+            QStringLiteral("parkingMapHelpDialog"))) {
+        existing->raise();
+        existing->activateWindow();
+        return;
+    }
+
+    auto *dialog = new QDialog(this);
+    dialog->setObjectName(QStringLiteral("parkingMapHelpDialog"));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(QStringLiteral("Parking Map 운영·편집 가이드"));
+    dialog->setModal(true);
+    dialog->setMinimumSize(780, 580);
+    dialog->resize(940, 760);
+
+    auto *dialogLayout = new QVBoxLayout(dialog);
+    dialogLayout->setContentsMargins(14, 14, 14, 14);
+    dialogLayout->setSpacing(10);
+
+    auto *scrollArea = new QScrollArea(dialog);
+    scrollArea->setObjectName(QStringLiteral("parkingMapHelpScrollArea"));
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    auto *content = new QWidget(scrollArea);
+    auto *layout = new QVBoxLayout(content);
+    layout->setContentsMargins(8, 6, 8, 6);
+    layout->setSpacing(14);
+
+    auto *title = new QLabel(QStringLiteral("Parking Map 운영·편집 가이드"), content);
+    title->setObjectName(QStringLiteral("parkingMapHelpTitle"));
+    title->setStyleSheet(QStringLiteral(
+        "font-size:22px;font-weight:900;color:#1f2d35;"));
+    layout->addWidget(title);
+
+    auto *intro = new QLabel(
+        QStringLiteral("평상시에는 CH1~CH4의 점유·차량·경고 상태를 관제하고, "
+                       "필요할 때만 Edit layout을 켜 이 PC에 표시할 슬롯 배치와 매핑을 수정합니다."),
+        content);
+    intro->setWordWrap(true);
+    intro->setStyleSheet(QStringLiteral(
+        "background:#e3f2fd;color:#0d47a1;border:1px solid #90caf9;"
+        "border-radius:7px;padding:10px;font-weight:700;"));
+    layout->addWidget(intro);
+
+    auto *monitorGroup = new QGroupBox(
+        QStringLiteral("1. 관제 모드 · 지도와 Runtime Status 읽기"), content);
+    auto *monitorLayout = new QVBoxLayout(monitorGroup);
+    auto *monitorHint = new QLabel(
+        QStringLiteral("지도 또는 오른쪽 매핑 표에서 슬롯을 선택하면 Runtime Status에 차량 종류, "
+                       "번호판, 점유 시간, 경고 종류와 ACK 상태가 표시됩니다. 단순 선택은 배치 변경으로 기록되지 않습니다."),
+        monitorGroup);
+    monitorHint->setWordWrap(true);
+    monitorLayout->addWidget(monitorHint);
+
+    auto *miniMap = new QWidget(monitorGroup);
+    miniMap->setObjectName(QStringLiteral("parkingMapHelpMiniMap"));
+    auto *miniMapLayout = new QGridLayout(miniMap);
+    miniMapLayout->setContentsMargins(0, 4, 0, 0);
+    miniMapLayout->setSpacing(8);
+    for (int channel = 0; channel < 4; ++channel) {
+        auto *channelFrame = new QFrame(miniMap);
+        channelFrame->setStyleSheet(QStringLiteral(
+            "QFrame { background:#1b1f23;border:1px solid #455a64;border-radius:6px; }"));
+        auto *channelLayout = new QVBoxLayout(channelFrame);
+        channelLayout->setContentsMargins(10, 8, 10, 8);
+        channelLayout->setSpacing(5);
+        auto *channelTitle = new QLabel(
+            QStringLiteral("CH%1 · IVA1–IVA4").arg(channel + 1), channelFrame);
+        channelTitle->setStyleSheet(QStringLiteral(
+            "border:none;color:white;font-weight:800;"));
+        channelLayout->addWidget(channelTitle);
+        auto makeSlotSample = [channelFrame](const QString &name,
+                                             const QString &meta,
+                                             const QString &border) {
+            auto *slot = new QLabel(QStringLiteral("%1    %2").arg(name, meta), channelFrame);
+            slot->setStyleSheet(QStringLiteral(
+                "background:#2a3035;color:#eceff1;border:2px solid %1;"
+                "border-radius:4px;padding:5px;font-size:11px;").arg(border));
+            return slot;
+        };
+        channelLayout->addWidget(makeSlotSample(
+            QStringLiteral("EV slot"), QStringLiteral("IVA mapped"),
+            QStringLiteral("#2d9cff")));
+        channelLayout->addWidget(makeSlotSample(
+            QStringLiteral("General slot"), QStringLiteral("IVA N/A"),
+            QStringLiteral("#ffd447")));
+        miniMapLayout->addWidget(channelFrame, channel / 2, channel % 2);
+    }
+    monitorLayout->addWidget(miniMap);
+    layout->addWidget(monitorGroup);
+
+    auto *legendGroup = new QGroupBox(
+        QStringLiteral("2. 색과 경고 표식 · 무엇을 뜻하는가"), content);
+    auto *legendLayout = new QVBoxLayout(legendGroup);
+    auto *legendHint = new QLabel(
+        QStringLiteral("슬롯 안쪽 색은 현재 차량 상태, 테두리는 구역 종류를 뜻합니다. "
+                       "경고는 차량 색을 덮지 않고 빨간 사이렌·halo·점멸로 별도 표시됩니다."),
+        legendGroup);
+    legendHint->setWordWrap(true);
+    legendLayout->addWidget(legendHint);
+    auto *stateLegend = new QWidget(legendGroup);
+    stateLegend->setObjectName(QStringLiteral("parkingMapHelpStateLegend"));
+    auto *stateLayout = new QGridLayout(stateLegend);
+    stateLayout->setContentsMargins(0, 2, 0, 0);
+    stateLayout->setSpacing(7);
+    struct HelpState {
+        QString name;
+        QString meaning;
+        QString fill;
+        QString border;
+    };
+    const QList<HelpState> states{
+        {QStringLiteral("VACANT"), QStringLiteral("빈 슬롯"),
+         QStringLiteral("#2a3035"), QStringLiteral("#68727a")},
+        {QStringLiteral("EV CAR"), QStringLiteral("전기차 점유"),
+         QStringLiteral("#174a66"), QStringLiteral("#38bdf8")},
+        {QStringLiteral("GENERAL CAR"), QStringLiteral("일반차 점유"),
+         QStringLiteral("#46535f"), QStringLiteral("#aebbc5")},
+        {QStringLiteral("EV ZONE"), QStringLiteral("파란 테두리"),
+         QStringLiteral("#242a2f"), QStringLiteral("#2d9cff")},
+        {QStringLiteral("GENERAL ZONE"), QStringLiteral("노란 테두리"),
+         QStringLiteral("#242a2f"), QStringLiteral("#ffd447")},
+        {QStringLiteral("ACTIVE WARNING"), QStringLiteral("빨간 사이렌·점멸"),
+         QStringLiteral("#5b1824"), QStringLiteral("#ff1744")},
+        {QStringLiteral("WAITING DATA"), QStringLiteral("runtime 상태 미수신"),
+         QStringLiteral("#eceff1"), QStringLiteral("#90a4ae")}
+    };
+    for (int index = 0; index < states.size(); ++index) {
+        const HelpState &state = states.at(index);
+        auto *card = new QFrame(stateLegend);
+        card->setStyleSheet(QStringLiteral(
+            "QFrame { background:white;border:1px solid #cfd8dc;border-radius:6px; }"));
+        auto *cardLayout = new QHBoxLayout(card);
+        cardLayout->setContentsMargins(8, 7, 8, 7);
+        auto *swatch = new QLabel(card);
+        swatch->setFixedSize(28, 22);
+        swatch->setStyleSheet(QStringLiteral(
+            "background:%1;border:2px solid %2;border-radius:4px;")
+                                  .arg(state.fill, state.border));
+        auto *textLayout = new QVBoxLayout;
+        textLayout->setSpacing(0);
+        auto *name = new QLabel(state.name, card);
+        name->setStyleSheet(QStringLiteral(
+            "border:none;color:#263238;font-weight:800;font-size:11px;"));
+        auto *meaning = new QLabel(state.meaning, card);
+        meaning->setStyleSheet(QStringLiteral(
+            "border:none;color:#607d8b;font-size:10px;"));
+        textLayout->addWidget(name);
+        textLayout->addWidget(meaning);
+        cardLayout->addWidget(swatch);
+        cardLayout->addLayout(textLayout, 1);
+        stateLayout->addWidget(card, index / 4, index % 4);
+    }
+    legendLayout->addWidget(stateLegend);
+    layout->addWidget(legendGroup);
+
+    auto *editGroup = new QGroupBox(
+        QStringLiteral("3. 배치 편집 · 권장 작업 순서"), content);
+    auto *editLayout = new QVBoxLayout(editGroup);
+    auto *editFlow = new QWidget(editGroup);
+    editFlow->setObjectName(QStringLiteral("parkingMapHelpEditFlow"));
+    auto *flowLayout = new QHBoxLayout(editFlow);
+    flowLayout->setContentsMargins(0, 0, 0, 0);
+    flowLayout->setSpacing(7);
+    const QList<QPair<QString, QString>> flowSteps{
+        {QStringLiteral("① Edit layout"), QStringLiteral("편집 모드 시작")},
+        {QStringLiteral("② 선택·수정"), QStringLiteral("이동·크기·회전·매핑")},
+        {QStringLiteral("③ Undo"), QStringLiteral("Ctrl+Z로 마지막 변경 복원")},
+        {QStringLiteral("④ Save layout"), QStringLiteral("로컬 배치 파일에 확정")}
+    };
+    for (int index = 0; index < flowSteps.size(); ++index) {
+        auto *card = new QFrame(editFlow);
+        card->setStyleSheet(QStringLiteral(
+            "QFrame { background:%1;border:1px solid #cfd8dc;border-radius:6px; }")
+                                .arg(index == flowSteps.size() - 1
+                                         ? QStringLiteral("#e8f5e9")
+                                         : QStringLiteral("#f5f7f9")));
+        auto *cardLayout = new QVBoxLayout(card);
+        auto *stepTitle = new QLabel(flowSteps.at(index).first, card);
+        stepTitle->setStyleSheet(QStringLiteral(
+            "border:none;color:#263238;font-weight:800;"));
+        auto *stepBody = new QLabel(flowSteps.at(index).second, card);
+        stepBody->setWordWrap(true);
+        stepBody->setStyleSheet(QStringLiteral(
+            "border:none;color:#546e7a;font-size:10px;"));
+        cardLayout->addWidget(stepTitle);
+        cardLayout->addWidget(stepBody);
+        flowLayout->addWidget(card, 1);
+        if (index < flowSteps.size() - 1) {
+            flowLayout->addWidget(new QLabel(QStringLiteral("→"), editFlow));
+        }
+    }
+    editLayout->addWidget(editFlow);
+
+    auto *slotTools = new QWidget(editGroup);
+    slotTools->setObjectName(QStringLiteral("parkingMapHelpSlotTools"));
+    auto *toolsLayout = new QHBoxLayout(slotTools);
+    toolsLayout->setContentsMargins(0, 4, 0, 0);
+    toolsLayout->setSpacing(8);
+    auto makeToolCard = [slotTools](const QString &heading, const QString &body) {
+        auto *card = new QFrame(slotTools);
+        card->setStyleSheet(QStringLiteral(
+            "QFrame { background:white;border:1px solid #cfd8dc;border-radius:6px; }"));
+        auto *cardLayout = new QVBoxLayout(card);
+        auto *cardTitle = new QLabel(heading, card);
+        cardTitle->setStyleSheet(QStringLiteral(
+            "border:none;color:#263238;font-weight:800;"));
+        auto *cardBody = new QLabel(body, card);
+        cardBody->setWordWrap(true);
+        cardBody->setStyleSheet(QStringLiteral(
+            "border:none;color:#455a64;font-size:11px;"));
+        cardLayout->addWidget(cardTitle);
+        cardLayout->addWidget(cardBody);
+        return card;
+    };
+    toolsLayout->addWidget(makeToolCard(
+        QStringLiteral("모양과 위치"),
+        QStringLiteral("드래그로 이동하고 Width·Height·Rotation으로 조정합니다.\n"
+                       "우클릭: Reset to default shape / Delete zone")), 1);
+    toolsLayout->addWidget(makeToolCard(
+        QStringLiteral("슬롯과 매핑"),
+        QStringLiteral("Add General/EV Slot으로 추가합니다. 빈자리가 없으면 NEW SLOT STAGING에 배치됩니다.\n"
+                       "General은 IVA N/A, EV는 채널 안의 사용 가능한 IVA가 배정됩니다.")), 1);
+    toolsLayout->addWidget(makeToolCard(
+        QStringLiteral("채널 이동"),
+        QStringLiteral("다른 채널 패널로 옮기면 Channel이 자동 변경됩니다. EV 슬롯의 IVA도 새 채널에서 "
+                       "유효하도록 유지하거나 다시 배정됩니다.")), 1);
+    editLayout->addWidget(slotTools);
+    layout->addWidget(editGroup);
+
+    auto *saveGroup = new QGroupBox(
+        QStringLiteral("4. 저장 버튼 · 서로 다른 결과"), content);
+    saveGroup->setObjectName(QStringLiteral("parkingMapHelpSaveActions"));
+    auto *saveLayout = new QGridLayout(saveGroup);
+    const QList<QPair<QString, QString>> saveActions{
+        {QStringLiteral("Save layout"), QStringLiteral("현재 배치를 로컬 파일에 저장하고 Unsaved changes를 해제합니다.")},
+        {QStringLiteral("Reload"), QStringLiteral("저장하지 않은 변경을 버리고 마지막 로컬 저장본을 다시 읽습니다.")},
+        {QStringLiteral("Reset default"), QStringLiteral("기본 배치를 편집 상태로 불러옵니다. 다음 실행에도 쓰려면 Save layout이 필요합니다.")}
+    };
+    for (int row = 0; row < saveActions.size(); ++row) {
+        auto *action = new QLabel(saveActions.at(row).first, saveGroup);
+        action->setStyleSheet(QStringLiteral(
+            "color:#263238;font-weight:900;background:#eceff1;border-radius:4px;padding:7px;"));
+        auto *meaning = new QLabel(saveActions.at(row).second, saveGroup);
+        meaning->setWordWrap(true);
+        meaning->setStyleSheet(QStringLiteral("color:#455a64;padding:4px;"));
+        saveLayout->addWidget(action, row, 0);
+        saveLayout->addWidget(meaning, row, 1);
+    }
+    saveLayout->setColumnStretch(1, 1);
+    layout->addWidget(saveGroup);
+
+    auto *safetyNotes = new QLabel(
+        QStringLiteral(
+            "안전하게 편집하기\n"
+            "• 상단에 Unsaved changes가 보이면 아직 파일에 확정되지 않은 변경이 있습니다.\n"
+            "• 종료할 때 저장하지 않은 배치가 있으면 Save / Discard / Cancel로 선택할 수 있습니다.\n"
+            "• Channel names와 Zone ID·Display·Hall Sensor도 배치 파일에 함께 저장됩니다.\n"
+            "• 이 화면의 EV/P Zone ID와 서버의 slot_id는 자동으로 같은 ID라고 가정하지 않습니다."),
+        content);
+    safetyNotes->setObjectName(QStringLiteral("parkingMapHelpSafetyNotes"));
+    safetyNotes->setWordWrap(true);
+    safetyNotes->setStyleSheet(QStringLiteral(
+        "background:#fff3e0;color:#5d4037;border:1px solid #ffcc80;"
+        "border-radius:7px;padding:11px;"));
+    layout->addWidget(safetyNotes);
+    layout->addStretch();
+
+    scrollArea->setWidget(content);
+    dialogLayout->addWidget(scrollArea, 1);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+    buttons->setObjectName(QStringLiteral("parkingMapHelpButtons"));
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
+    dialogLayout->addWidget(buttons);
+    dialog->open();
 }
 
 ParkingMapPage::~ParkingMapPage()
@@ -1112,7 +1445,7 @@ void ParkingMapPage::applyEditorFields()
     zone.hallSensorId = normalizedZoneId(m_hallSensorEdit->text());
     zone.enabled = m_enabledCheck->isChecked();
     zone.rect = QRectF(m_xSpin->value(), m_ySpin->value(),
-                       m_widthSlider->value(), m_heightSlider->value());
+                       m_widthSpin->value(), m_heightSpin->value());
     zone.rotation = m_rotationSlider->value();
     if (previousChannel != zone.cameraChannel) {
         zone.rect = nextZoneRectForChannel(zone.cameraChannel);
@@ -1805,7 +2138,13 @@ void ParkingMapPage::updateZoneVisual(const QString &zoneId)
     item->setToolTip(toolTip);
     label->setText(zone.displayName.isEmpty() ? zone.zoneId : zone.displayName);
     label->setBrush(slotTextColor(zone.enabled));
-    stateLabel->setText(compactVehicleText(visualKnown, visual));
+    QString vehicleText = compactVehicleText(visualKnown, visual);
+    if (visual.ocrStatus == OcrStatus::Requested) {
+        vehicleText += QStringLiteral(" [OCR...]");
+    } else if (visual.ocrStatus == OcrStatus::Unrecognized) {
+        vehicleText += QStringLiteral(" [OCR FAIL]");
+    }
+    stateLabel->setText(vehicleText);
     stateLabel->setBrush(slotTextColor(zone.enabled));
     stateLabel->setPos(6, qMax(22.0, item->rect().height() - 18.0));
     metaLabel->setText(slotMetaText(zone));
@@ -2015,7 +2354,8 @@ void ParkingMapPage::updateEditorFromSelection()
     const QList<QWidget *> editorWidgets = {
         m_zoneIdEdit, m_displayNameEdit, m_zoneTypeCombo, m_cameraChannelCombo,
         m_ivaAreaCombo, m_hallSensorEdit, m_enabledCheck, m_xSpin, m_ySpin,
-        m_widthSlider, m_heightSlider, m_rotationSlider, m_deleteButton
+        m_widthSpin, m_heightSpin, m_widthSlider, m_heightSlider,
+        m_rotationSlider, m_deleteButton
     };
     for (QWidget *widget : editorWidgets) {
         if (widget) widget->setEnabled(m_editMode && hasSelection);
@@ -2044,6 +2384,8 @@ void ParkingMapPage::updateEditorFromSelection()
     const QSignalBlocker blockY(m_ySpin);
     const QSignalBlocker blockW(m_widthSlider);
     const QSignalBlocker blockH(m_heightSlider);
+    const QSignalBlocker blockWSpin(m_widthSpin);
+    const QSignalBlocker blockHSpin(m_heightSpin);
     const QSignalBlocker blockRotation(m_rotationSlider);
     m_zoneIdEdit->setText(zone->zoneId);
     m_displayNameEdit->setText(zone->displayName);
@@ -2056,6 +2398,8 @@ void ParkingMapPage::updateEditorFromSelection()
     m_ySpin->setValue(zone->rect.y());
     m_widthSlider->setValue(qRound(zone->rect.width()));
     m_heightSlider->setValue(qRound(zone->rect.height()));
+    m_widthSpin->setValue(qRound(zone->rect.width()));
+    m_heightSpin->setValue(qRound(zone->rect.height()));
     m_rotationSlider->setValue(qRound(zone->rotation));
     m_ivaAreaCombo->setEnabled(m_editMode && zone->zoneType == QStringLiteral("EV"));
     updateGeometrySliderLabels();
@@ -2103,6 +2447,16 @@ void ParkingMapPage::scrollMapToOrigin()
 
 void ParkingMapPage::updateGeometrySliderLabels()
 {
+    if (m_widthSpin && m_widthSlider
+        && m_widthSpin->value() != m_widthSlider->value()) {
+        QSignalBlocker blocker(m_widthSpin);
+        m_widthSpin->setValue(m_widthSlider->value());
+    }
+    if (m_heightSpin && m_heightSlider
+        && m_heightSpin->value() != m_heightSlider->value()) {
+        QSignalBlocker blocker(m_heightSpin);
+        m_heightSpin->setValue(m_heightSlider->value());
+    }
     if (m_widthValueLabel && m_widthSlider) {
         m_widthValueLabel->setText(QStringLiteral("%1 px").arg(m_widthSlider->value()));
     }

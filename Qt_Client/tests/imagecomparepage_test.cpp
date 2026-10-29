@@ -3,6 +3,7 @@
 
 #include <QApplication>
 #include <QBuffer>
+#include <QDialog>
 #include <QEventLoop>
 #include <QImage>
 #include <QLabel>
@@ -239,6 +240,20 @@ int main(int argc, char **argv)
         || displayedLaterCapture.cacheKey() == displayedOriginal.cacheKey()) {
         return 24;
     }
+
+    QPushButton *helpButton = page.findChild<QPushButton *>(
+        QStringLiteral("imageCompareHelpButton"));
+    if (!helpButton) return 26;
+    helpButton->click();
+    QApplication::processEvents();
+    QDialog *helpDialog = page.findChild<QDialog *>(
+        QStringLiteral("imageCompareHelpDialog"));
+    QLabel *helpSteps = helpDialog
+        ? helpDialog->findChild<QLabel *>(QStringLiteral("imageCompareHelpSteps"))
+        : nullptr;
+    if (!helpDialog || !helpSteps
+        || !helpSteps->text().contains(QStringLiteral("ORIGINAL"))) return 27;
+    helpDialog->close();
 
     return 0;
 }

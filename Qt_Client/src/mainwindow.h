@@ -15,15 +15,18 @@ class EvidencePage;
 class EventsPage;
 class FireAlarmPopup;
 class ImageComparePage;
+class IvaSettingsPage;
 class QCloseEvent;
 class QFrame;
 class QLabel;
 class NotificationCenter;
 class ParkingController;
 class ParkingMapPage;
+class ParkingRoiSettingsPage;
 class ParkingSimulationService;
 class QPushButton;
 class SettingsPage;
+class WiseAiConfigClient;
 class QStackedWidget;
 class QToolButton;
 
@@ -41,14 +44,15 @@ private:
     void buildUi();
     void connectPages();
     void renderParkingState();
-    void saveCameraIp(const QString &cameraIpText);
+    void saveCameraCredentials(const QString &cameraIpText,
+                               const QString &username,
+                               const QString &password);
     void updateNotificationIndicator();
     void showNotificationPopup();
     void showFireAlarmPopup(const QString &channelId, const QString &alarmId);
     void closeFireAlarmPopup(const QString &channelId, const QString &alarmId);
     void showEventsPage();
-    bool isEvidenceSlot(const QString &sourceId) const;
-    bool showEvidencePage(const QString &sourceId);
+    bool showEventEvidencePage(const QString &eventId);
     QString cameraConfigPath() const;
     QString clientConfigPath() const;
     QString clientLocalConfigPath() const;
@@ -68,14 +72,17 @@ private:
     QPushButton *m_imageCompareNavButton = nullptr;
     DashboardPage *m_dashboardPage = nullptr;
     ParkingMapPage *m_parkingMapPage = nullptr;
+    ParkingRoiSettingsPage *m_parkingRoiSettingsPage = nullptr;
     EventsPage *m_eventsPage = nullptr;
     EvidencePage *m_evidencePage = nullptr;
     ImageComparePage *m_imageComparePage = nullptr;
+    IvaSettingsPage *m_ivaSettingsPage = nullptr;
     SettingsPage *m_settingsPage = nullptr;
     DebugPage *m_debugPage = nullptr;
     DiagnosticsService *m_diagnosticsService = nullptr;
     ParkingController *m_parkingController = nullptr;
     ParkingSimulationService *m_parkingSimulationService = nullptr;
+    WiseAiConfigClient *m_wiseAiConfigClient = nullptr;
 };
 
 #endif

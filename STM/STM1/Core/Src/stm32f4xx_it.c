@@ -22,6 +22,7 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "lora_e22.h"   /* hlora -- USART1_IRQHandler (파일 끝) */
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -59,6 +60,7 @@ extern DMA_HandleTypeDef hdma_adc1;
 extern ADC_HandleTypeDef hadc1;
 extern TIM_HandleTypeDef htim2;
 extern TIM_HandleTypeDef htim1;
+extern UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN EV */
 
@@ -163,6 +165,34 @@ void DebugMon_Handler(void)
 /******************************************************************************/
 
 /**
+  * @brief This function handles EXTI line4 interrupt (HALL3, PB4).
+  */
+void EXTI4_IRQHandler(void)
+{
+  HAL_GPIO_EXTI_IRQHandler(HALL3_D0_Pin);
+}
+
+/**
+  * @brief This function handles EXTI line[9:5] interrupts. Shared by two of
+  * our pins: HALL1 (PA8, pin 8) and HALL4 (PB5, pin 5). Each
+  * HAL_GPIO_EXTI_IRQHandler call only does something if that specific
+  * pin's own pending flag is set, so it's safe to call both unconditionally.
+  */
+void EXTI9_5_IRQHandler(void)
+{
+  HAL_GPIO_EXTI_IRQHandler(HALL1_D0_Pin);
+  HAL_GPIO_EXTI_IRQHandler(HALL4_D0_Pin);
+}
+
+/**
+  * @brief This function handles EXTI line[15:10] interrupt (HALL2, PB10).
+  */
+void EXTI15_10_IRQHandler(void)
+{
+  HAL_GPIO_EXTI_IRQHandler(HALL2_D0_Pin);
+}
+
+/**
   * @brief This function handles ADC1 global interrupt.
   */
 void ADC_IRQHandler(void)
@@ -218,6 +248,27 @@ void DMA2_Stream0_IRQHandler(void)
   /* USER CODE END DMA2_Stream0_IRQn 1 */
 }
 
-/* USER CODE BEGIN 1 */
+/**
+  * @brief This function handles USART2 global interrupt. Was never enabled
+  * before (see usart.c) since the link was TX-only; now needed so
+  * AlertCommand_StartReceive()'s HAL_UART_Receive_IT can complete and hand
+  * bytes to HAL_UART_RxCpltCallback (main.c).
+  */
+void USART2_IRQHandler(void)
+{
+  HAL_UART_IRQHandler(&huart2);
+}
 
+/* USER CODE BEGIN 1 */
+/**
+  * @brief LoRa 링크(USART1) 전역 인터럽트.
+  *
+  * USART1 은 .ioc 에 없다 -- LoRa 드라이버가 직접 초기화한다(CubeMX 재생성에
+  * 안전하도록). 그래서 이 핸들러도 CubeMX 가 만들어주지 않으므로 여기 USER
+  * CODE 영역에 둔다. NVIC 활성화는 LoRa_StartReceiveIT() 안에 있다.
+  */
+void USART1_IRQHandler(void)
+{
+  HAL_UART_IRQHandler(&hlora);
+}
 /* USER CODE END 1 */

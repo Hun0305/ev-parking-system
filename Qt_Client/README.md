@@ -13,6 +13,8 @@ Qt Widgets와 QML 기반 스마트 주차 관제 클라이언트입니다.
 - API 실패 시 Mock 화면 유지
 - 이벤트 로그와 CSV 내보내기
 - Pi MQTT 화재 후보 알림 구독 (`parking/fire/#`)
+- Settings에서 Pi 서버의 장기 점유 판정 시간 조회·변경
+- CH1 공유 RTSP 프레임에서 EV01~EV04 주차 ROI 조회·편집·즉시 적용
 
 ## 실시간 MQTT 알림
 
@@ -49,6 +51,8 @@ enabled=true
 base_url=http://172.20.35.167:8080
 slots_path=/api/v1/parking-slots
 slot_detail_path=/api/v1/parking-slots/{slot_id}
+parking_roi_list_path=/api/v1/settings/parking-slots/roi
+parking_roi_path=/api/v1/settings/parking-slots/{slot_id}/roi
 timeout_ms=5000
 reconnect_interval_ms=5000
 max_reconnect_interval_ms=60000
@@ -63,12 +67,21 @@ Copy-Item ..\config\client_config.local.example.ini ..\config\client_config.loca
 
 client_config.local.ini은 Git에서 제외되며, 공용 파일보다 우선합니다.
 
-Settings 화면의 `Server API URL`에서 주소를 저장하면 로컬 오버라이드 파일에 기록되고 즉시 재연결합니다. 연결 실패 시 5초부터 최대 60초까지 지수 백오프로 자동 재시도하며 `Reconnect now` 버튼으로 즉시 다시 연결할 수 있습니다.
+Settings 화면에서 프로토콜, `Server IP / Host`, `API Port`를 각각 입력해 저장하면
+내부적으로 전체 base URL을 조합하여 로컬 오버라이드 파일에 기록하고 즉시 재연결합니다.
+예를 들어 `http`, `raspberry-pi.local`, `8080`은 `http://raspberry-pi.local:8080`으로
+저장됩니다. 연결 실패 시 5초부터 최대 60초까지 지수 백오프로 자동 재시도하며
+`Reconnect now` 버튼으로 즉시 다시 연결할 수 있습니다.
+
+`Parking ROI` 화면은 Dashboard에서 이미 디코딩 중인 CH1 프레임을 공유합니다.
+프레임이나 미리보기 이미지를 서버에 업로드하지 않으며, 화면에서 선택한 영역을
+`x`, `y`, `width`, `height`의 0~1 정규화 좌표로 변환해 Pi REST API에만 전송합니다.
+화면 진입 시 SQLite에 저장된 EV01~EV04 좌표를 GET으로 다시 읽어 오버레이를 복원합니다.
 
 ## 소스 구조
 
 - `src/mainwindow.*`: 사이드바, 페이지 전환, 화면 간 signal 연결
-- `src/pages/`: Dashboard, Parking Map, Events, Settings, Debug 화면
+- `src/pages/`: Dashboard, Parking Map, Parking ROI, Events, Settings, Debug 화면
 - `src/controllers/parkingcontroller.*`: API·Mock 데이터와 주차 상태/알람 처리
 - `src/dialogs/slotevidencedialog.*`: 차량·번호판 이미지 증거 화면
 - `src/models/parkingstate.*`: 화면에서 공유하는 주차 상태 모델

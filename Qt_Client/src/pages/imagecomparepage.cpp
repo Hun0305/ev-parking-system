@@ -1,6 +1,7 @@
 #include "imagecomparepage.h"
 
 #include "api/imageloader.h"
+#include "widgets/pagehelp.h"
 
 #include <QAbstractItemView>
 #include <QColor>
@@ -142,8 +143,9 @@ ImageComparePage::ImageComparePage(QWidget *parent)
     auto *summaryFrame = new QFrame(content);
     summaryFrame->setStyleSheet(QStringLiteral(
         "QFrame { background:white; border:1px solid #c7cdd4; border-radius:6px; }"));
-    auto *summaryLayout = new QVBoxLayout(summaryFrame);
+    auto *summaryLayout = new QHBoxLayout(summaryFrame);
     summaryLayout->setContentsMargins(14, 10, 14, 10);
+    auto *summaryTextLayout = new QVBoxLayout;
     m_summaryLabel = new QLabel(QStringLiteral("Image quality comparison"),
                                 summaryFrame);
     m_summaryLabel->setObjectName(QStringLiteral("imageCompareSummaryLabel"));
@@ -155,8 +157,22 @@ ImageComparePage::ImageComparePage(QWidget *parent)
     m_statusLabel->setObjectName(QStringLiteral("imageCompareStatusLabel"));
     m_statusLabel->setWordWrap(true);
     m_statusLabel->setStyleSheet(QStringLiteral("border:none;color:#546e7a;"));
-    summaryLayout->addWidget(m_summaryLabel);
-    summaryLayout->addWidget(m_statusLabel);
+    summaryTextLayout->addWidget(m_summaryLabel);
+    summaryTextLayout->addWidget(m_statusLabel);
+    summaryLayout->addLayout(summaryTextLayout, 1);
+    summaryLayout->addWidget(createPageHelpButton(
+        this, summaryFrame,
+        {QStringLiteral("imageCompare"), QStringLiteral("Image Compare"),
+         QStringLiteral("Image Compare 사용 안내"),
+         QStringLiteral("같은 촬영 시점의 원본 이미지와 개선 이미지를 나란히 비교합니다."),
+         QStringLiteral(
+             "<b>1. 슬롯 선택</b><br>왼쪽 목록에서 확인할 주차 슬롯을 선택하고 필요하면 <i>Refresh images</i>로 다시 조회합니다.<br><br>"
+             "<b>2. 캡처 선택</b><br><i>Capture selection</i>에서 촬영 건을 선택합니다. ORIGINAL과 ENHANCED가 모두 있는 최신 캡처가 우선 선택됩니다.<br><br>"
+             "<b>3. 같은 시점 비교</b><br>왼쪽은 원본, 오른쪽은 개선본입니다. READY·N/A로 각 변형의 존재 여부를 확인합니다.<br><br>"
+             "<b>4. 전체 크기 확인</b><br><i>Open full image</i>로 각 이미지를 원본 크기로 확인합니다."),
+         QStringLiteral(
+             "※ 이 화면은 서로 다른 시간의 First/Latest 비교가 아니라 동일 image_id의 가공 전후 비교입니다.\n"
+             "   OCR 뒤의 (session)은 해당 사진에서 직접 읽은 값이 아니라 세션에 확정된 번호판입니다. 개선본은 원본을 대체하지 않습니다.")}));
     contentLayout->addWidget(summaryFrame);
 
     auto *comparisonLayout = new QHBoxLayout;

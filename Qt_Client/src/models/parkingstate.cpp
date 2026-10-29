@@ -70,11 +70,14 @@ SlotAlarmKind slotAlarmKindFromText(const QString &text, SlotState fallbackState
 }
 
 SlotVisualState deriveSlotVisualState(SlotState state, bool vehicleTypeKnown,
-                                      bool isEv, const QString &alarmText)
+                                      bool isEv, const QString &alarmText,
+                                      OcrStatus ocrStatus, const QString &correlationId)
 {
     SlotVisualState visual;
     visual.alarm = slotAlarmKindFromText(alarmText, state);
     visual.alarmAcknowledged = state == SlotState::Acked;
+    visual.ocrStatus = ocrStatus;
+    visual.correlationId = correlationId;
 
     if (state == SlotState::Vacant) {
         visual.occupancy = SlotOccupancy::Vacant;

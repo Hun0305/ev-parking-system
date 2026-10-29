@@ -22,6 +22,8 @@ struct MonitoringEvent {
     QString id;
     QDateTime occurredAt;
     QString sourceId;
+    QString evidenceSlotId;
+    qint64 parkingSessionId = -1;
     QString eventType;
     EventSeverity severity = EventSeverity::Unknown;
     EventAckState ackState = EventAckState::None;

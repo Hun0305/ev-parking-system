@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="release" src="https://img.shields.io/badge/release-v1.0-2ea44f" />
+  <img alt="release" src="https://img.shields.io/badge/release-v2.0-2ea44f" />
   <img alt="stack" src="https://img.shields.io/badge/stack-C%2B%2B%20%7C%20Qt%20%7C%20STM32%20%7C%20OpenCV-orange" />
 </p>
 
@@ -98,6 +98,52 @@ STM32 센서 → Raspberry Pi → 카메라/MQTT/DB로 이어지는 주차 감�
 <img width="1788" height="817" alt="image" src="https://github.com/user-attachments/assets/d662db34-3743-46ea-99e7-b72347da5f08" />
 
 <img width="1919" height="1022" alt="image" src="https://github.com/user-attachments/assets/637eb746-0556-4fc6-a73f-277f513e8d6e" />
+
+## v2.0 업데이트 내역
+
+> 일정상 V2.0 배포 시점(8/15)까지 `Pi_Server`, `Qt_Client`, `STM` 세 저장소에 쌓인 커밋을
+> 조사해 정리한 내용입니다. `cv_snapshot_api`는 이 시점엔 아직 만들어지기 전(최초 커밋
+> 2026-08-21)이라 v2.0 변경 목록에는 포함되지 않습니다.
+
+v1.0 프로토타입 이후, 카메라 기반 차량 인식(IVA)을 핵심 입력으로 끌어들이고 화재·주차
+이벤트 처리 전체를 재구조화한 확장 단계입니다.
+
+### Pi_Server
+
+- **카메라 IVA 연동** — WiseAI IVA 차량 감지 통합(EVDA-192), IVA 입출차 안정화(EVDA-197),
+  IVA·홀센서 하이브리드 입출차 판정(EVDA-212)
+- **번호판 조명 LED** — 야간 점등 정책 및 STM 하행 명령 연동(EVDA-194)
+- **장기 점유 설정 API** — Qt에서 장기 점유 기준시간을 조회·변경하는 REST API(EVDA-141)
+- **서버 아키텍처 리팩터링**(EVDA-205/207) — MqttTransport/MqttEndpoint/MqttEventBridge
+  계층 분리, FireAlarmService+FirePersistence+FireDeliveryCoordinator로 화재 처리 분리,
+  SlotTransitionActor 기반 슬롯 상태 직렬화, ParkingCorrelation으로 세션·IVA 추적 분리
+- **환경설정 구조 개선** — `.env.public`/`.env.private` 이원화로 민감정보와 공용 설정 분리(EVDA-203)
+- **알림** — Qt 이벤트 텔레그램 채널 알림 추가(EVDA-189)
+- **LoRa** — STM↔Pi LoRa 프로토콜 v1.1 수신 지원(EVDA-201/46)
+- **CI/CD** — Jenkins CI/CD 파이프라인 추가(EVDA-198)
+
+### Qt_Client
+
+- **Evidence 비교** — 원본/개선 이미지 비교(Image Compare) 화면 및 Pi MQTT 화재 ACK/CLEAR
+  연동(EVDA-169)
+- **장기 점유 설정** — Overstay 설정 및 API 주소 입력 필드 추가(EVDA-190)
+- **카메라 IVA 설정** — 한화비전 WiseAI 카메라 설정 API 직접 연동, IVA Setup 화면, TLS
+  인증서 TOFU(Trust On First Use) 자동 고정
+- **ID 체계 통일** — SlotIdMapper 도입으로 서버·클라이언트 슬롯 ID 체계 통일
+- **ROI 편집** — Parking ROI 편집 워크플로우 및 IVA UI 개선(EVDA-195)
+- **사용성** — 메뉴 도움말 GUI 약 50% 구현, 이벤트→Evidence 증거 이동 개선(EVDA-200)
+- **서버 계약 안정화**(EVDA-207) — fire revision/delivery identity 검증, 카메라 자격증명
+  저장, WiseAI strict verification, overstay runtime 상태 반영
+- v1.0 프로토타입 버그 수정: 상태 폴링 재개, OCR 세션 폴백, Dashboard EV 슬롯 집계
+
+### STM
+
+- **전송 정책 분리** — 홀센서 1초 주기 전송과 화재 엣지 트리거 전송 정책 분리(EVDA-158)
+- **인터럽트 전환** — 홀센서·화재감지 GPIO 폴링 → EXTI 인터럽트 전환(EVDA-140)
+- **번호판 조명 LED** — 수신부 구현(EVDA-194)
+- **LoRa 무선 전송** — E22 드라이버 기반 홀/불꽃 센서 이벤트 송신(EVDA-46)
+- **LoRa v1.1** — 센서 페이로드 v1.1 및 양방향 통신, STM1/STM2 2노드 구성(EVDA-46)
+- **진단/문서** — LoRa 부팅 진단 로그 상시화, 팀원용 Pi 구축 가이드 추가(EVDA-46)
 
 ## cv_snapshot_api 릴리즈 노트
 
