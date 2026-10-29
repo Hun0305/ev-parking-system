@@ -1,14 +1,150 @@
 #include "pages/debugpage.h"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QDialog>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QTableWidget>
+#include <QTabWidget>
 
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
     DebugPage page;
+
+    QLabel *environmentBanner = page.findChild<QLabel *>(
+        QStringLiteral("debugEnvironmentBanner"));
+    QTabWidget *tabs = page.findChild<QTabWidget *>(
+        QStringLiteral("debugTabWidget"));
+    QScrollArea *overviewScroll = page.findChild<QScrollArea *>(
+        QStringLiteral("debugOverviewScrollArea"));
+    QScrollArea *toolsScroll = page.findChild<QScrollArea *>(
+        QStringLiteral("debugTestToolsScrollArea"));
+    if (!environmentBanner || !tabs || !overviewScroll || !toolsScroll
+        || tabs->count() != 3
+        || !environmentBanner->text().contains(QStringLiteral("DEVELOPMENT"))
+        || !overviewScroll->widgetResizable() || !toolsScroll->widgetResizable()) {
+        return 3;
+    }
+
+    QPushButton *reconnectButton = page.findChild<QPushButton *>(
+        QStringLiteral("debugReconnectApiButton"));
+    QPushButton *ackButton = page.findChild<QPushButton *>(
+        QStringLiteral("debugAcknowledgeAlarmsButton"));
+    QPushButton *mockButton = page.findChild<QPushButton *>(
+        QStringLiteral("debugToggleMockEvButton"));
+    QPushButton *randomButton = page.findChild<QPushButton *>(
+        QStringLiteral("debugRandomizeParkingButton"));
+    QPushButton *nonEvButton = page.findChild<QPushButton *>(
+        QStringLiteral("debugNonEvAlertButton"));
+    QPushButton *overstayButton = page.findChild<QPushButton *>(
+        QStringLiteral("debugOverstayAlertButton"));
+    QPushButton *sensorButton = page.findChild<QPushButton *>(
+        QStringLiteral("debugSensorErrorButton"));
+    QPushButton *sampleButton = page.findChild<QPushButton *>(
+        QStringLiteral("debugSampleMessagesButton"));
+    QPushButton *injectButton = page.findChild<QPushButton *>(
+        QStringLiteral("debugManualInjectButton"));
+    QLineEdit *messageEdit = page.findChild<QLineEdit *>(
+        QStringLiteral("debugManualMessageEdit"));
+    if (!reconnectButton || !ackButton || !mockButton || !randomButton
+        || !nonEvButton || !overstayButton || !sensorButton || !sampleButton
+        || !injectButton || !messageEdit) return 4;
+    if (reconnectButton->property("impactScope").toString()
+            != QStringLiteral("SERVER_API")
+        || ackButton->property("impactScope").toString()
+            != QStringLiteral("LOCAL_QT_STATE")
+        || nonEvButton->property("impactScope").toString()
+            != QStringLiteral("LOCAL_TEST_EVENT")
+        || injectButton->property("impactScope").toString()
+            != QStringLiteral("LOCAL_TEST_EVENT")) return 5;
+
+    int reconnectCount = 0;
+    int ackCount = 0;
+    int mockCount = 0;
+    int randomCount = 0;
+    int nonEvCount = 0;
+    int overstayCount = 0;
+    int sensorCount = 0;
+    int sampleCount = 0;
+    QString manualMessage;
+    QObject::connect(&page, &DebugPage::reconnectApiRequested,
+                     [&]() { ++reconnectCount; });
+    QObject::connect(&page, &DebugPage::clearAlarmsRequested,
+                     [&]() { ++ackCount; });
+    QObject::connect(&page, &DebugPage::toggleMockEvRequested,
+                     [&]() { ++mockCount; });
+    QObject::connect(&page, &DebugPage::randomizeParkingRequested,
+                     [&]() { ++randomCount; });
+    QObject::connect(&page, &DebugPage::nonEvAlertRequested,
+                     [&]() { ++nonEvCount; });
+    QObject::connect(&page, &DebugPage::overtimeAlertRequested,
+                     [&]() { ++overstayCount; });
+    QObject::connect(&page, &DebugPage::sensorErrorRequested,
+                     [&]() { ++sensorCount; });
+    QObject::connect(&page, &DebugPage::sampleMessagesRequested,
+                     [&]() { ++sampleCount; });
+    QObject::connect(&page, &DebugPage::manualMessageRequested,
+                     [&](const QString &message) { manualMessage = message; });
+    reconnectButton->click();
+    ackButton->click();
+    mockButton->click();
+    randomButton->click();
+    nonEvButton->click();
+    overstayButton->click();
+    sensorButton->click();
+    sampleButton->click();
+    messageEdit->setText(QStringLiteral("PARKING_SLOT,P01,OCCUPIED"));
+    injectButton->click();
+    if (reconnectCount != 1 || ackCount != 1 || mockCount != 1
+        || randomCount != 1 || nonEvCount != 1 || overstayCount != 1
+        || sensorCount != 1 || sampleCount != 1
+        || manualMessage != QStringLiteral("PARKING_SLOT,P01,OCCUPIED")) {
+        return 6;
+    }
+
+    QTableWidget *logTable = page.findChild<QTableWidget *>(
+        QStringLiteral("debugLogTable"));
+    QLabel *logState = page.findChild<QLabel *>(
+        QStringLiteral("debugLogStateLabel"));
+    QComboBox *levelFilter = page.findChild<QComboBox *>(
+        QStringLiteral("debugLogLevelFilter"));
+    QPushButton *clearLogButton = page.findChild<QPushButton *>(
+        QStringLiteral("debugLogClearButton"));
+    if (!logTable || !logState || !levelFilter || !clearLogButton
+        || logState->isHidden()) return 7;
+
+    DiagnosticLogRecord infoRecord;
+    infoRecord.occurredAt = QDateTime::currentDateTime();
+    infoRecord.level = QStringLiteral("INFO");
+    infoRecord.module = QStringLiteral("API");
+    infoRecord.code = QStringLiteral("CONNECTED");
+    infoRecord.message = QStringLiteral("Server connected");
+    page.appendDiagnosticLog(infoRecord);
+    DiagnosticLogRecord errorRecord;
+    errorRecord.occurredAt = QDateTime::currentDateTime();
+    errorRecord.level = QStringLiteral("ERROR");
+    errorRecord.module = QStringLiteral("RTSP");
+    errorRecord.code = QStringLiteral("FRAME_STALE");
+    errorRecord.message = QStringLiteral("No recent frame");
+    page.appendDiagnosticLog(errorRecord);
+    if (logTable->rowCount() != 2 || !logState->isHidden()
+        || logTable->item(0, 1)->background().color().name()
+            != QStringLiteral("#ffebee")) return 8;
+    levelFilter->setCurrentText(QStringLiteral("ERROR"));
+    if (logTable->isRowHidden(0) || !logTable->isRowHidden(1)) return 9;
+    clearLogButton->click();
+    if (logTable->rowCount() != 0 || logState->isHidden()) return 10;
+
+    page.resize(820, 620);
+    page.show();
+    QApplication::processEvents();
+    if (overviewScroll->horizontalScrollBarPolicy() != Qt::ScrollBarAsNeeded) {
+        return 11;
+    }
 
     QPushButton *helpButton = page.findChild<QPushButton *>(
         QStringLiteral("debugHelpButton"));

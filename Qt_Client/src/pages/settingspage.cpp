@@ -22,9 +22,10 @@ SettingsPage::SettingsPage(const QString &configPath, const QString &cameraIp,
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
-    auto *helpLayout = new QHBoxLayout;
-    helpLayout->addStretch();
-    helpLayout->addWidget(createPageHelpButton(
+    layout->addLayout(createPageHeader(
+        this, QStringLiteral("Settings"),
+        QStringLiteral("Connection and overstay policy configuration")));
+    createPageHelpButton(
         this, this,
         {QStringLiteral("settings"), QStringLiteral("Settings"),
          QStringLiteral("Settings 사용 안내"),
@@ -36,8 +37,7 @@ SettingsPage::SettingsPage(const QString &configPath, const QString &cameraIp,
              "<b>4. 초과주차 정책</b><br>페이지를 열거나 <i>Refresh</i>를 누르면 서버 설정을 읽습니다. 1분~24시간 범위로 입력하고 <i>Apply</i>하면 저장 후 서버 값을 다시 검증합니다."),
          QStringLiteral(
              "※ Pi 주소 변경 시 MQTT host도 같은 서버 host를 따릅니다. HTTP 허용 여부는 로컬 보안 설정에 따르며 TLS 실패 시 평문으로 자동 전환하지 않습니다.\n"
-             "   카메라와 서버 credential은 이 화면에서 편집하지 않으며 Git에 저장하면 안 됩니다.")}));
-    layout->addLayout(helpLayout);
+             "   카메라와 서버 credential은 이 화면에서 편집하지 않으며 Git에 저장하면 안 됩니다.")});
     auto *group = new QGroupBox(QStringLiteral("Runtime Configuration"), this);
     auto *grid = new QGridLayout(group);
     m_cameraIpLabel = new QLabel(group);

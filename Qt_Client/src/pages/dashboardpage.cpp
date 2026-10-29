@@ -17,6 +17,7 @@
 #include <QQmlContext>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSizePolicy>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTimer>
@@ -32,8 +33,9 @@ DashboardPage::DashboardPage(const QStringList &lowRtspUrls,
     pageLayout->setContentsMargins(0, 0, 0, 0);
     pageLayout->setSpacing(10);
 
-    auto *helpLayout = new QHBoxLayout;
-    helpLayout->addStretch();
+    pageLayout->addLayout(createPageHeader(
+        this, QStringLiteral("Dashboard"),
+        QStringLiteral("Live monitoring, summary, and recent events")));
     auto *helpButton = new QPushButton(QStringLiteral("Dashboard 안내"), this);
     helpButton->setObjectName(QStringLiteral("dashboardHelpButton"));
     helpButton->setAccessibleName(QStringLiteral("Dashboard 관제 안내"));
@@ -46,52 +48,109 @@ DashboardPage::DashboardPage(const QStringList &lowRtspUrls,
         "border-radius:6px; padding:6px 11px; font-weight:800; }"
         "QPushButton:hover { background:#37474f; border-color:#fb8c00; }"
         "QPushButton:pressed { background:#1c252a; }"));
-    helpLayout->addWidget(helpButton);
-    pageLayout->addLayout(helpLayout);
-
     auto *topLayout = new QHBoxLayout;
     topLayout->setSpacing(10);
     auto *videoGroup = new QGroupBox(QStringLiteral("4-Channel RTSP Monitor"), this);
     m_videoGrid = new QGridLayout(videoGroup);
     m_videoGrid->setSpacing(8);
-    m_videoGrid->addWidget(createVideoChannel(0, QStringLiteral("CH1"), QStringLiteral("Original Stream"), lowRtspUrls.value(0), highRtspUrls.value(0)), 0, 0);
-    m_videoGrid->addWidget(createVideoChannel(1, QStringLiteral("CH2"), QStringLiteral("Plate ROI"), lowRtspUrls.value(1), highRtspUrls.value(1)), 0, 1);
-    m_videoGrid->addWidget(createVideoChannel(2, QStringLiteral("CH3"), QStringLiteral("Analysis Overlay"), lowRtspUrls.value(2), highRtspUrls.value(2)), 1, 0);
-    m_videoGrid->addWidget(createVideoChannel(3, QStringLiteral("CH4"), QStringLiteral("Event Snapshot"), lowRtspUrls.value(3), highRtspUrls.value(3)), 1, 1);
-    topLayout->addWidget(videoGroup, 4);
+    m_videoGrid->addWidget(createVideoChannel(0, QStringLiteral("CH1"), lowRtspUrls.value(0), highRtspUrls.value(0)), 0, 0);
+    m_videoGrid->addWidget(createVideoChannel(1, QStringLiteral("CH2"), lowRtspUrls.value(1), highRtspUrls.value(1)), 0, 1);
+    m_videoGrid->addWidget(createVideoChannel(2, QStringLiteral("CH3"), lowRtspUrls.value(2), highRtspUrls.value(2)), 1, 0);
+    m_videoGrid->addWidget(createVideoChannel(3, QStringLiteral("CH4"), lowRtspUrls.value(3), highRtspUrls.value(3)), 1, 1);
+    topLayout->addWidget(videoGroup, 3);
 
-    auto *summaryGroup = new QGroupBox(QStringLiteral("Current Summary"), this);
+    auto *infoPanel = new QWidget(this);
+    infoPanel->setFixedWidth(280);
+    auto *infoLayout = new QVBoxLayout(infoPanel);
+    infoLayout->setContentsMargins(0, 0, 0, 0);
+    infoLayout->setSpacing(8);
+
+    auto *summaryGroup = new QGroupBox(QStringLiteral("Current Summary"), infoPanel);
+    summaryGroup->setObjectName(QStringLiteral("dashboardCurrentSummary"));
+    summaryGroup->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     auto *summaryGrid = new QGridLayout(summaryGroup);
-    m_totalSlotsLabel = new QLabel(QStringLiteral("0"), summaryGroup);
-    m_occupiedSlotsLabel = new QLabel(QStringLiteral("0"), summaryGroup);
-    m_vacantSlotsLabel = new QLabel(QStringLiteral("0"), summaryGroup);
-    m_sensorErrorLabel = new QLabel(QStringLiteral("0"), summaryGroup);
-    summaryGrid->addWidget(new QLabel(QStringLiteral("Total slots"), summaryGroup), 0, 0);
-    summaryGrid->addWidget(m_totalSlotsLabel, 0, 1);
-    summaryGrid->addWidget(new QLabel(QStringLiteral("Occupied"), summaryGroup), 1, 0);
-    summaryGrid->addWidget(m_occupiedSlotsLabel, 1, 1);
-    summaryGrid->addWidget(new QLabel(QStringLiteral("Vacant"), summaryGroup), 2, 0);
-    summaryGrid->addWidget(m_vacantSlotsLabel, 2, 1);
-    summaryGrid->addWidget(new QLabel(QStringLiteral("Hall errors"), summaryGroup), 3, 0);
-    summaryGrid->addWidget(m_sensorErrorLabel, 3, 1);
-    topLayout->addWidget(summaryGroup, 1);
-    pageLayout->addLayout(topLayout, 4);
+    summaryGrid->setContentsMargins(8, 10, 8, 8);
+    summaryGrid->setSpacing(8);
 
-    m_recentEventTable = new QTableWidget(0, 5, this);
+    const auto addSummaryCard = [summaryGroup, summaryGrid](int row, int column,
+                                                              const QString &title,
+                                                              const QString &objectName,
+                                                              const QString &color,
+                                                              QLabel **valueLabel) {
+        auto *card = new QFrame(summaryGroup);
+        card->setObjectName(objectName + QStringLiteral("Card"));
+        card->setStyleSheet(QStringLiteral(
+            "QFrame { background:%1; border:1px solid #cfd8dc; border-radius:6px; }")
+                                .arg(color));
+        auto *cardLayout = new QVBoxLayout(card);
+        cardLayout->setContentsMargins(8, 7, 8, 7);
+        cardLayout->setSpacing(2);
+
+        auto *titleLabel = new QLabel(title, card);
+        titleLabel->setObjectName(objectName + QStringLiteral("Title"));
+        titleLabel->setStyleSheet(QStringLiteral(
+            "border:none; color:#546e7a; font-size:11px; font-weight:700;"));
+        titleLabel->setWordWrap(true);
+        *valueLabel = new QLabel(QStringLiteral("0"), card);
+        (*valueLabel)->setObjectName(objectName);
+        (*valueLabel)->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        (*valueLabel)->setStyleSheet(QStringLiteral(
+            "border:none; color:#17212b; font-size:22px; font-weight:900;"));
+        cardLayout->addWidget(titleLabel);
+        cardLayout->addWidget(*valueLabel);
+        summaryGrid->addWidget(card, row, column);
+    };
+
+    addSummaryCard(0, 0, QStringLiteral("Total slots"),
+                   QStringLiteral("totalSlotsLabel"), QStringLiteral("#e3f2fd"),
+                   &m_totalSlotsLabel);
+    addSummaryCard(0, 1, QStringLiteral("Occupied"),
+                   QStringLiteral("occupiedSlotsLabel"), QStringLiteral("#fff3e0"),
+                   &m_occupiedSlotsLabel);
+    addSummaryCard(1, 0, QStringLiteral("Vacant"),
+                   QStringLiteral("vacantSlotsLabel"), QStringLiteral("#e8f5e9"),
+                   &m_vacantSlotsLabel);
+    addSummaryCard(1, 1, QStringLiteral("Hall errors"),
+                   QStringLiteral("sensorErrorLabel"), QStringLiteral("#ffebee"),
+                   &m_sensorErrorLabel);
+    infoLayout->addWidget(summaryGroup);
+
+    auto *recentGroup = new QGroupBox(QStringLiteral("Recent Events"), infoPanel);
+    recentGroup->setObjectName(QStringLiteral("dashboardRecentEvents"));
+    auto *recentLayout = new QVBoxLayout(recentGroup);
+    recentLayout->setContentsMargins(8, 10, 8, 8);
+    recentLayout->setSpacing(6);
+    auto *recentHeaderLayout = new QHBoxLayout;
+    auto *recentHint = new QLabel(QStringLiteral("Latest events"), recentGroup);
+    recentHint->setStyleSheet(QStringLiteral("color:#607d8b;"));
+    recentHeaderLayout->addWidget(recentHint);
+    recentHeaderLayout->addStretch();
+    auto *recentDetailButton = new QPushButton(QStringLiteral("Detail"), recentGroup);
+    recentDetailButton->setObjectName(QStringLiteral("recentEventsDetailButton"));
+    recentDetailButton->setToolTip(QStringLiteral("Open the complete Events page"));
+    recentDetailButton->setFixedHeight(30);
+    recentHeaderLayout->addWidget(recentDetailButton);
+    recentLayout->addLayout(recentHeaderLayout);
+
+    m_recentEventTable = new QTableWidget(0, 3, recentGroup);
     m_recentEventTable->setObjectName(QStringLiteral("recentEventTable"));
-    m_recentEventTable->setHorizontalHeaderLabels({QStringLiteral("Time"), QStringLiteral("Zone"), QStringLiteral("Event"), QStringLiteral("Message"), QStringLiteral("Status")});
-    m_recentEventTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_recentEventTable->setHorizontalHeaderLabels({QStringLiteral("Time"),
+                                                    QStringLiteral("Event"),
+                                                    QStringLiteral("Message")});
+    auto *recentHeader = m_recentEventTable->horizontalHeader();
+    recentHeader->setSectionResizeMode(0, QHeaderView::Fixed);
+    recentHeader->setSectionResizeMode(1, QHeaderView::Fixed);
+    recentHeader->setSectionResizeMode(2, QHeaderView::Stretch);
+    recentHeader->resizeSection(0, 92);
+    recentHeader->resizeSection(1, 124);
     m_recentEventTable->verticalHeader()->setVisible(false);
+    m_recentEventTable->setMinimumHeight(160);
     m_recentEventTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_recentEventTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    auto *recentGroup = new QGroupBox(QStringLiteral("Recent Events"), this);
-    auto *recentLayout = new QVBoxLayout(recentGroup);
-    auto *recentHint = new QLabel(
-        QStringLiteral("Double-click an event to open the parking session recorded by its event ID."), recentGroup);
-    recentHint->setStyleSheet(QStringLiteral("color:#607d8b;"));
-    recentLayout->addWidget(recentHint);
     recentLayout->addWidget(m_recentEventTable);
-    pageLayout->addWidget(recentGroup, 1);
+    infoLayout->addWidget(recentGroup, 1);
+    topLayout->addWidget(infoPanel, 1);
+    pageLayout->addLayout(topLayout, 1);
     startDelayedVideoStreams();
 
     m_diagnosticTimer = new QTimer(this);
@@ -111,6 +170,8 @@ DashboardPage::DashboardPage(const QStringList &lowRtspUrls,
                     emit eventEvidenceRequested(eventId);
                 }
             });
+    connect(recentDetailButton, &QPushButton::clicked,
+            this, &DashboardPage::recentEventsDetailRequested);
     connect(helpButton, &QPushButton::clicked,
             this, &DashboardPage::showHelpDialog);
 }
@@ -163,7 +224,7 @@ void DashboardPage::showHelpDialog()
         QStringLiteral("4-Channel RTSP Monitor · 무엇을 보는 영역인가"), content);
     auto *monitorLayout = new QVBoxLayout(monitorGroup);
     auto *monitorHint = new QLabel(
-        QStringLiteral("각 채널은 RTSP 상태·해상도·Frame 시간을 함께 표시합니다. 채널 화면을 클릭하면 단일 채널로 확대되고 다시 클릭하면 4분할로 복귀합니다."),
+        QStringLiteral("각 채널은 동일한 4K 스트림을 표시합니다. 채널 화면을 클릭하면 해당 화면만 전체 보기로 확대되며, 다시 클릭하면 4분할로 복귀합니다. 클릭으로 스트림을 재연결하거나 화질을 전환하지 않습니다."),
         monitorGroup);
     monitorHint->setWordWrap(true);
     monitorLayout->addWidget(monitorHint);
@@ -173,9 +234,6 @@ void DashboardPage::showHelpDialog()
     auto *videoGrid = new QGridLayout(videoGridWidget);
     videoGrid->setContentsMargins(0, 4, 0, 0);
     videoGrid->setSpacing(8);
-    const QStringList channelTitles{
-        QStringLiteral("Original Stream"), QStringLiteral("Plate ROI"),
-        QStringLiteral("Analysis Overlay"), QStringLiteral("Event Snapshot")};
     for (int channel = 0; channel < 4; ++channel) {
         auto *preview = new QFrame(videoGridWidget);
         const bool fireExample = channel == 1;
@@ -187,8 +245,7 @@ void DashboardPage::showHelpDialog()
         auto *previewLayout = new QVBoxLayout(preview);
         previewLayout->setContentsMargins(10, 8, 10, 8);
         auto *channelLabel = new QLabel(
-            QStringLiteral("CH%1 · %2")
-                .arg(channel + 1).arg(channelTitles.at(channel)), preview);
+            QStringLiteral("CH%1").arg(channel + 1), preview);
         channelLabel->setStyleSheet(QStringLiteral(
             "border:none;color:white;font-weight:800;"));
         auto *statusLabel = new QLabel(
@@ -265,7 +322,7 @@ void DashboardPage::showHelpDialog()
     };
     eventLayout->addWidget(makeFlowCard(
         QStringLiteral("Recent Events"),
-        QStringLiteral("Time · Zone · Event · Message · Status\n최근 5건만 표시"),
+        QStringLiteral("Time · Event · Message\n최근 5건만 표시"),
         QStringLiteral("#f5f7f9")), 1);
     eventLayout->addWidget(new QLabel(QStringLiteral("→"), eventGroup));
     eventLayout->addWidget(makeFlowCard(
@@ -304,10 +361,11 @@ void DashboardPage::showHelpDialog()
 }
 
 QWidget *DashboardPage::createVideoChannel(int channelIndex, const QString &channel,
-                                           const QString &title, const QString &lowRtspUrl,
+                                           const QString &lowRtspUrl,
                                            const QString &highRtspUrl)
 {
     auto *frame = new QFrame(this);
+    frame->setObjectName(QStringLiteral("dashboardVideoChannel%1").arg(channel));
     frame->setMinimumSize(260, 150);
     frame->setFrameShape(QFrame::StyledPanel);
     frame->setStyleSheet(QStringLiteral("QFrame { background: #15191d; border: 1px solid #3a4148; border-radius: 4px; }"));
@@ -317,7 +375,6 @@ QWidget *DashboardPage::createVideoChannel(int channelIndex, const QString &chan
     videoView->setResizeMode(QQuickWidget::SizeRootObjectToView);
     videoView->setClearColor(Qt::black);
     videoView->rootContext()->setContextProperty(QStringLiteral("channelName"), channel);
-    videoView->rootContext()->setContextProperty(QStringLiteral("channelTitle"), title);
     videoView->rootContext()->setContextProperty(QStringLiteral("rtspLowSourceUrl"), lowRtspUrl);
     videoView->rootContext()->setContextProperty(QStringLiteral("rtspHighSourceUrl"), highRtspUrl);
     videoView->rootContext()->setContextProperty(QStringLiteral("rtspSourceLabel"), lowRtspUrl.isEmpty() ? QStringLiteral("RTSP URL not set") : QStringLiteral("RTSP"));
@@ -366,6 +423,29 @@ void DashboardPage::toggleVideoChannel(int channelIndex)
 {
     if (!m_videoGrid || channelIndex < 0 || channelIndex >= m_videoChannelWidgets.size()) return;
     m_expandedVideoChannel = m_expandedVideoChannel == channelIndex ? -1 : channelIndex;
+    applyVideoChannelLayout();
+}
+
+bool DashboardPage::showExpandedChannel(const QString &channel)
+{
+    QString normalized = channel.trimmed().toUpper();
+    if (!normalized.startsWith(QStringLiteral("CH"))) return false;
+    normalized.remove(0, 2);
+    normalized.remove(QLatin1Char(' '));
+    bool validNumber = false;
+    const int channelIndex = normalized.toInt(&validNumber) - 1;
+    if (!validNumber || channelIndex < 0
+        || channelIndex >= m_videoChannelWidgets.size()) {
+        return false;
+    }
+    m_expandedVideoChannel = channelIndex;
+    applyVideoChannelLayout();
+    return true;
+}
+
+void DashboardPage::applyVideoChannelLayout()
+{
+    if (!m_videoGrid) return;
     while (QLayoutItem *item = m_videoGrid->takeAt(0)) {
         if (item->widget()) item->widget()->setVisible(false);
         delete item;
@@ -374,14 +454,23 @@ void DashboardPage::toggleVideoChannel(int channelIndex)
         for (int i = 0; i < m_videoChannelWidgets.size(); ++i) {
             QWidget *widget = m_videoChannelWidgets.at(i);
             widget->setVisible(true);
-            if (QQuickItem *root = m_videoQuickWidgets.value(i)->rootObject()) root->setProperty("expanded", false);
+            if (QQuickItem *root = m_videoQuickWidgets.value(i)->rootObject()) {
+                root->setProperty("expanded", false);
+            }
             m_videoGrid->addWidget(widget, i / 2, i % 2);
         }
         return;
     }
     QWidget *expanded = m_videoChannelWidgets.at(m_expandedVideoChannel);
+    for (int i = 0; i < m_videoQuickWidgets.size(); ++i) {
+        if (QQuickItem *root = m_videoQuickWidgets.value(i)->rootObject()) {
+            root->setProperty("expanded", false);
+        }
+    }
     expanded->setVisible(true);
-    if (QQuickItem *root = m_videoQuickWidgets.value(m_expandedVideoChannel)->rootObject()) root->setProperty("expanded", true);
+    if (QQuickItem *root = m_videoQuickWidgets.value(m_expandedVideoChannel)->rootObject()) {
+        root->setProperty("expanded", true);
+    }
     m_videoGrid->addWidget(expanded, 0, 0, 2, 2);
 }
 
@@ -402,12 +491,7 @@ void DashboardPage::setRtspUrls(const QStringList &lowRtspUrls, const QStringLis
             root->setProperty("streamEnabled", true);
         }
     }
-    toggleVideoChannel(-1);
-    while (QLayoutItem *item = m_videoGrid->takeAt(0)) delete item;
-    for (int i = 0; i < m_videoChannelWidgets.size(); ++i) {
-        m_videoChannelWidgets.at(i)->setVisible(true);
-        m_videoGrid->addWidget(m_videoChannelWidgets.at(i), i / 2, i % 2);
-    }
+    applyVideoChannelLayout();
 }
 
 void DashboardPage::publishRtspDiagnostics()
@@ -474,12 +558,12 @@ void DashboardPage::prependEvent(const MonitoringEvent &event)
 {
     m_recentEventTable->insertRow(0);
     const QStringList values = {
-        monitoringEventTimeText(event), event.sourceId, event.eventType,
-        event.message, monitoringEventStatusText(event)};
+        monitoringEventTimeText(event), event.eventType, event.message};
     for (int column = 0; column < values.size(); ++column) {
         auto *item = new QTableWidgetItem(values.at(column));
         item->setData(Qt::UserRole, event.id);
         item->setData(Qt::UserRole + 1, event.evidenceSlotId);
+        item->setToolTip(values.at(column));
         m_recentEventTable->setItem(0, column, item);
     }
     while (m_recentEventTable->rowCount() > 5) m_recentEventTable->removeRow(5);

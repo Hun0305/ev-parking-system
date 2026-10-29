@@ -7,6 +7,7 @@
 #include "api/imageloader.h"
 #include "api/parkingroi.h"
 #include "api/parkingresponseparser.h"
+#include "api/urlorigin.h"
 #include "services/mqttserviceclient.h"
 
 #include <QDateTime>
@@ -33,7 +34,8 @@ constexpr int kMaximumOverstayThresholdSeconds = 86400;
 
 bool isParkingRoiZoneId(const QString &slotId)
 {
-    static const QRegularExpression pattern(QStringLiteral("^EV-(\\d+)$"));
+    static const QRegularExpression pattern(
+        QStringLiteral("^(?:EV|P)-(\\d+)$"));
     const QRegularExpressionMatch match = pattern.match(slotId);
     return match.hasMatch() && match.captured(1).toInt() > 0;
 }
@@ -326,8 +328,10 @@ void ParkingController::initializeMqttClient()
     const bool followApiHost =
         setting(QStringLiteral("mqtt/follow_api_host"), true).toBool();
     if (followApiHost) {
-        const QUrl apiUrl(
-            setting(QStringLiteral("api/base_url"), QString()).toString().trimmed());
+        const QUrl apiUrl = m_hasAuthenticatedServerOverride
+            ? m_authenticatedServerOrigin
+            : QUrl(setting(QStringLiteral("api/base_url"), QString())
+                       .toString().trimmed());
         if (apiUrl.isValid() && !apiUrl.host().isEmpty()) {
             mqttSettings.host = apiUrl.host();
         }
@@ -916,6 +920,13 @@ bool ParkingController::applyServerParkingEvent(const QJsonObject &object,
         return false;
     }
 
+    if (vacant) {
+        m_state.slotImages.remove(slotId);
+        m_state.slotSessionIds.remove(slotId);
+    } else if (event.sessionId > 0) {
+        m_state.slotSessionIds.insert(slotId, event.sessionId);
+    }
+
     VehicleClass incomingVehicleClass = VehicleClass::Unknown;
     const bool vehicleClassKnown =
         vehicleClassFromText(event.vehicleType, incomingVehicleClass);
@@ -930,6 +941,8 @@ bool ParkingController::applyServerParkingEvent(const QJsonObject &object,
             if (removeUnknownState) {
                 m_state.evSlots.remove(slotId);
                 m_state.slotPlateNumbers.remove(slotId);
+                m_state.slotImages.remove(slotId);
+                m_state.slotSessionIds.remove(slotId);
             }
         } else {
             removeUnknownState = !m_state.parkingSlots.contains(slotId)
@@ -937,6 +950,9 @@ bool ParkingController::applyServerParkingEvent(const QJsonObject &object,
                     == SlotOccupancy::Unknown;
             if (removeUnknownState) {
                 m_state.parkingSlots.remove(slotId);
+                m_state.slotPlateNumbers.remove(slotId);
+                m_state.slotImages.remove(slotId);
+                m_state.slotSessionIds.remove(slotId);
             }
         }
         if (removeUnknownState) {
@@ -957,6 +973,9 @@ bool ParkingController::applyServerParkingEvent(const QJsonObject &object,
         if (occupied) {
             visual.occupancy = SlotOccupancy::Occupied;
             slot.occupiedTime = durationText(event.occupiedSeconds);
+            if (!slot.occupiedSince.isValid() && event.occurredAt.isValid()) {
+                slot.occupiedSince = event.occurredAt;
+            }
         } else if (vacant) {
             visual.occupancy = SlotOccupancy::Vacant;
             visual.vehicleClass = VehicleClass::Unknown;
@@ -965,6 +984,7 @@ bool ParkingController::applyServerParkingEvent(const QJsonObject &object,
             visual.ocrStatus = OcrStatus::None;
             slot.plateNumber = QStringLiteral("-");
             slot.occupiedTime = QStringLiteral("-");
+            slot.occupiedSince = QDateTime();
             slot.correlationId.clear();
         }
 
@@ -1001,8 +1021,12 @@ bool ParkingController::applyServerParkingEvent(const QJsonObject &object,
         slot.alarmText = alarmTextFromKind(visual.alarm);
         visual.correlationId = slot.correlationId;
         slot.visual = visual;
+        slot.lastUpdatedAt = event.occurredAt.isValid()
+            ? event.occurredAt : QDateTime::currentDateTime();
+        slot.eventId = event.eventId;
         m_state.evSlots.insert(slotId, slot);
         m_state.slotPlateNumbers.insert(slotId, slot.plateNumber);
+        if (vacant) m_state.slotPlateNumbers.remove(slotId);
     } else {
         ParkingSlotInfo slot = m_state.parkingSlots.value(slotId);
         slot.slotId = slotId;
@@ -1011,6 +1035,10 @@ bool ParkingController::applyServerParkingEvent(const QJsonObject &object,
         if (occupied) {
             visual.occupancy = SlotOccupancy::Occupied;
             visual.vehicleClass = VehicleClass::General;
+            if (!slot.occupiedSince.isValid() && event.occurredAt.isValid()) {
+                slot.occupiedSince = event.occurredAt;
+            }
+            slot.occupiedTime = durationText(event.occupiedSeconds);
         } else if (vacant) {
             visual.occupancy = SlotOccupancy::Vacant;
             visual.vehicleClass = VehicleClass::Unknown;
@@ -1018,6 +1046,8 @@ bool ParkingController::applyServerParkingEvent(const QJsonObject &object,
             visual.alarmAcknowledged = false;
             visual.ocrStatus = OcrStatus::None;
             slot.correlationId.clear();
+            slot.occupiedTime = QStringLiteral("-");
+            slot.occupiedSince = QDateTime();
         }
         
         if (ocrRequested) {
@@ -1041,7 +1071,16 @@ bool ParkingController::applyServerParkingEvent(const QJsonObject &object,
         slot.state = stateFromVisual(visual);
         visual.correlationId = slot.correlationId;
         slot.visual = visual;
+        slot.lastUpdatedAt = event.occurredAt.isValid()
+            ? event.occurredAt : QDateTime::currentDateTime();
+        slot.eventId = event.eventId;
         m_state.parkingSlots.insert(slotId, slot);
+        if (vacant) {
+            m_state.slotPlateNumbers.remove(slotId);
+        } else if (!event.plateNumber.trimmed().isEmpty()) {
+            m_state.slotPlateNumbers.insert(slotId,
+                                            event.plateNumber.trimmed());
+        }
     }
 
     notifyStateChanged();
@@ -1334,7 +1373,8 @@ void ParkingController::initializeApiClient()
                                            : sharedSettings.value(key, defaultValue);
     };
 
-    m_state.apiEnabled = setting(QStringLiteral("api/enabled"), false).toBool();
+    m_state.apiEnabled = m_hasAuthenticatedServerOverride
+        || setting(QStringLiteral("api/enabled"), false).toBool();
     m_apiDiagnostic = ApiDiagnosticState{};
     m_apiDiagnostic.enabled = m_state.apiEnabled;
     if (!m_state.apiEnabled) {
@@ -1345,7 +1385,10 @@ void ParkingController::initializeApiClient()
         return;
     }
 
-    m_apiBaseUrl = QUrl(setting(QStringLiteral("api/base_url"), QString()).toString().trimmed());
+    m_apiBaseUrl = m_hasAuthenticatedServerOverride
+        ? m_authenticatedServerOrigin
+        : QUrl(setting(QStringLiteral("api/base_url"), QString())
+                   .toString().trimmed());
     m_apiDiagnostic.endpoint = m_apiBaseUrl.toString(
         QUrl::RemoveUserInfo | QUrl::RemoveQuery | QUrl::RemoveFragment);
     m_apiDiagnostic.status = QStringLiteral("DISCONNECTED");
@@ -1414,6 +1457,26 @@ void ParkingController::rebuildApiClient()
         m_apiBaseUrl, m_apiTimeoutMs, m_allowInsecureHttp, this);
     m_imageLoader = new ImageLoader(
         m_apiTimeoutMs, m_allowInsecureHttp, this);
+    m_apiClient->setBearerAuthentication(m_authenticatedServerOrigin,
+                                         m_bearerToken);
+    m_imageLoader->setBearerAuthentication(m_authenticatedServerOrigin,
+                                            m_bearerToken);
+
+    const auto handleAuthenticationExpired = [this]() {
+        if (m_authenticationExpired) {
+            return;
+        }
+        m_authenticationExpired = true;
+        m_snapshotRequestInFlight = false;
+        if (m_reconnectTimer) {
+            m_reconnectTimer->stop();
+        }
+        emit authenticationExpired();
+    };
+    connect(m_apiClient, &ApiClient::authenticationRequired,
+            this, handleAuthenticationExpired);
+    connect(m_imageLoader, &ImageLoader::authenticationRequired,
+            this, handleAuthenticationExpired);
 
     connect(m_apiClient, &ApiClient::jsonReceived, this,
             [this](const QString &path, const QJsonDocument &document,
@@ -1490,12 +1553,39 @@ void ParkingController::rebuildApiClient()
                 }
             });
 
+    emit imageLoaderChanged(m_imageLoader);
     emit serverBaseUrlChanged(m_apiBaseUrl.toString());
     publishApiDiagnostic();
     notifyStateChanged();
 }
+
+void ParkingController::setBearerAuthentication(
+    const QUrl &fixedLoginOrigin, const QByteArray &token)
+{
+    m_authenticatedServerOrigin =
+        UrlOrigin::normalizedHttpOrigin(fixedLoginOrigin);
+    m_bearerToken = token;
+    if (m_bearerToken.contains('\r') || m_bearerToken.contains('\n')) {
+        m_bearerToken.clear();
+    }
+    m_hasAuthenticatedServerOverride =
+        !m_authenticatedServerOrigin.isEmpty() && !m_bearerToken.isEmpty();
+    m_authenticationExpired = false;
+    if (m_apiClient) {
+        m_apiClient->setBearerAuthentication(m_authenticatedServerOrigin,
+                                             m_bearerToken);
+    }
+    if (m_imageLoader) {
+        m_imageLoader->setBearerAuthentication(m_authenticatedServerOrigin,
+                                               m_bearerToken);
+    }
+}
+
 void ParkingController::reconnectNow()
 {
+    if (m_authenticationExpired) {
+        return;
+    }
     if (!m_state.apiEnabled || !m_apiClient) {
         emit serverConnectionChanged(QStringLiteral("API disabled"), false);
         return;
@@ -1505,10 +1595,6 @@ void ParkingController::reconnectNow()
         emit serverConnectionChanged(QStringLiteral("Connection already in progress"), false);
         return;
     }
-    const QString message =
-        QStringLiteral("Connecting to %1...").arg(m_apiBaseUrl.toString(
-            QUrl::RemoveUserInfo | QUrl::RemoveQuery | QUrl::RemoveFragment));
-    emit bannerChanged(message, false);
     emit serverConnectionChanged(QStringLiteral("Connecting..."), false);
     m_apiDiagnostic.connected = false;
     m_apiDiagnostic.status = QStringLiteral("CONNECTING");
@@ -1860,7 +1946,8 @@ void ParkingController::applyOverstayThresholdResponse(
 
 void ParkingController::scheduleReconnect(const QString &reason)
 {
-    if (!m_state.apiEnabled || !m_reconnectTimer) return;
+    if (m_authenticationExpired
+        || !m_state.apiEnabled || !m_reconnectTimer) return;
     const int delayMs = m_currentReconnectDelayMs;
     emit bannerChanged(
         QStringLiteral("Parking API unavailable | Retrying in %1 seconds")
@@ -1892,6 +1979,12 @@ void ParkingController::updateServerBaseUrl(const QString &baseUrl)
             QStringLiteral("Enter a valid %1 server URL including port.")
                 .arg(m_allowInsecureHttp ? QStringLiteral("HTTP or HTTPS")
                                         : QStringLiteral("HTTPS")));
+        return;
+    }
+    if (m_hasAuthenticatedServerOverride
+        && !UrlOrigin::sameHttpOrigin(url, m_authenticatedServerOrigin)) {
+        emit serverConfigurationError(QStringLiteral(
+            "Sign in again before changing to a different server."));
         return;
     }
 
@@ -1942,9 +2035,12 @@ void ParkingController::applyParkingSnapshot(const QJsonDocument &document)
     const ParkingViewState previousState = m_state;
     resetSlotsForSnapshot();
     int appliedCount = 0;
+    int rejectedCount = 0;
+    int duplicateCount = 0;
     for (const ParkingSlotSnapshot &slot : snapshot.parkingSlots) {
         const QString mappedSlotId = m_slotIdMapper.toZoneId(slot.slotId);
         if (mappedSlotId.isEmpty()) {
+            ++rejectedCount;
             recordEvent(slot.slotId, QStringLiteral("API_SLOT_SKIPPED"), QStringLiteral("No zone mapping for server slot"), QStringLiteral("SKIPPED"));
             continue;
         }
@@ -1952,8 +2048,12 @@ void ParkingController::applyParkingSnapshot(const QJsonDocument &document)
         // in case the mapper's output wasn't perfect, or for passthrough mode.
         const QString slotId = normalizeParkingSlotId(mappedSlotId);
         if (!isEvSlotId(slotId) && !isGeneralSlotId(slotId)) {
+            ++rejectedCount;
             recordEvent(slotId, QStringLiteral("API_SLOT_SKIPPED"), QStringLiteral("Unknown parking slot in response"), QStringLiteral("SKIPPED"));
             continue;
+        }
+        if (m_state.evSlots.contains(slotId) || m_state.parkingSlots.contains(slotId)) {
+            ++duplicateCount;
         }
         SlotState state = slotStateFromText(slot.state);
         const SlotAlarmKind alarmKind = slotAlarmKindFromText(slot.alarm, state);
@@ -1993,32 +2093,66 @@ void ParkingController::applyParkingSnapshot(const QJsonDocument &document)
                                        ? QStringLiteral("NORMAL") : slot.alarm)
                                 : alarmTextFromKind(visual.alarm)};
             info.visual = visual;
+            info.occupiedSince = slot.occupiedSince;
+            info.lastUpdatedAt = snapshot.generatedAt;
             m_state.evSlots[slotId] = info;
         } else {
             ParkingSlotInfo info{slotId, state};
             info.visual = visual;
+            info.occupiedTime = occupiedDurationText(
+                slot.occupiedSince, slot.elapsedSeconds);
+            info.occupiedSince = slot.occupiedSince;
+            info.lastUpdatedAt = snapshot.generatedAt;
             m_state.parkingSlots[slotId] = info;
         }
         m_state.slotPlateNumbers.insert(slotId, slot.plateNumber);
+        m_state.slotSessionIds.insert(slotId, slot.sessionId);
         QList<ParkingImageResource> images;
         for (ParkingImageResource image : slot.images) { image.url = resolveApiUrl(image.url); images.append(image); }
+        if (images.isEmpty() && slot.sessionId > 0
+            && previousState.slotSessionIds.value(slotId, -1)
+                == slot.sessionId) {
+            images = previousState.slotImages.value(slotId);
+        }
         if (!images.isEmpty()) m_state.slotImages.insert(slotId, images);
         ++appliedCount;
     }
+    // Keep Dashboard capacity tied to the latest accepted server snapshot.
+    // MQTT/manual updates can add or remove entries in m_state afterwards;
+    // they are runtime state changes, not a new capacity declaration.
+    m_state.serverSlotCount = m_state.evSlots.size() + m_state.parkingSlots.size();
+    m_state.hasServerSnapshot = true;
+    m_state.generatedAt = snapshot.generatedAt;
     notifyStateChanged();
     const QString generatedAt = snapshot.generatedAt.isValid()
         ? snapshot.generatedAt.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))
         : QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-    emit statusMessageChanged(QStringLiteral("API synchronized: %1 slots at %2").arg(appliedCount).arg(generatedAt));
+    const int uniqueCount = m_state.serverSlotCount;
+    const int evCount = m_state.evSlots.size();
+    const int parkingCount = m_state.parkingSlots.size();
+    const int receivedCount = snapshot.parkingSlots.size();
+    const QString snapshotDetail = QStringLiteral(
+        "Server snapshot: received=%1, applied=%2, unique=%3 (EV=%4, P=%5), "
+        "rejected=%6, duplicates=%7, generated=%8")
+        .arg(receivedCount)
+        .arg(appliedCount)
+        .arg(uniqueCount)
+        .arg(evCount)
+        .arg(parkingCount)
+        .arg(rejectedCount)
+        .arg(duplicateCount)
+        .arg(generatedAt);
+    emit statusMessageChanged(snapshotDetail);
     m_apiDiagnostic.connected = true;
     m_apiDiagnostic.status = QStringLiteral("CONNECTED");
     m_apiDiagnostic.lastError.clear();
     m_apiDiagnostic.lastSuccessAt = QDateTime::currentDateTime();
     m_apiDiagnostic.consecutiveFailures = 0;
     m_apiDiagnostic.nextRetrySeconds = 0;
-    m_apiDiagnostic.appliedSlotCount = appliedCount;
+    m_apiDiagnostic.appliedSlotCount = uniqueCount;
     publishApiDiagnostic();
-    recordEvent(QStringLiteral("SYSTEM"), QStringLiteral("API_SYNC"), QStringLiteral("Applied %1 parking slots").arg(appliedCount), QStringLiteral("DONE"));
+    recordEvent(QStringLiteral("SYSTEM"), QStringLiteral("API_SYNC"), snapshotDetail,
+                QStringLiteral("DONE"));
 }
 
 void ParkingController::publishApiDiagnostic()
@@ -2045,6 +2179,7 @@ void ParkingController::applyParkingSlotDetail(
     }
     const QString slotId = normalizeParkingSlotId(mappedSlotId);
     m_state.slotPlateNumbers.insert(slotId, slot.plateNumber);
+    m_state.slotSessionIds.insert(slotId, slot.sessionId);
     QList<ParkingImageResource> images;
     for (ParkingImageResource image : slot.images) { image.url = resolveApiUrl(image.url); images.append(image); }
     if (images.isEmpty()) m_state.slotImages.remove(slotId); else m_state.slotImages.insert(slotId, images);
@@ -2096,7 +2231,11 @@ void ParkingController::applyParkingSessionImages(
 
 void ParkingController::resetSlotsForSnapshot()
 {
-    m_state.evSlots.clear(); m_state.parkingSlots.clear(); m_state.slotImages.clear(); m_state.slotPlateNumbers.clear();
+    m_state.evSlots.clear();
+    m_state.parkingSlots.clear();
+    m_state.slotImages.clear();
+    m_state.slotPlateNumbers.clear();
+    m_state.slotSessionIds.clear();
 }
 
 void ParkingController::requestSlotDetail(const QString &rawSlotId)
@@ -2126,6 +2265,10 @@ void ParkingController::requestSlotDetail(const QString &rawSlotId)
 void ParkingController::replaceViewState(const ParkingViewState &state)
 {
     m_state = state;
+    // replaceViewState() is used by the local simulation/test path. It must
+    // not be mistaken for a server-provided capacity snapshot.
+    m_state.serverSlotCount = 0;
+    m_state.hasServerSnapshot = false;
     notifyStateChanged();
 }
 
@@ -2160,6 +2303,11 @@ void ParkingController::applyParkingSlotUpdate(const QString &slotId, SlotState 
         updated.visual = deriveSlotVisualState(state, state == SlotState::Occupied, false);
     }
     m_state.parkingSlots[slotId] = updated;
+    if (state == SlotState::Vacant) {
+        m_state.slotPlateNumbers.remove(slotId);
+        m_state.slotImages.remove(slotId);
+        m_state.slotSessionIds.remove(slotId);
+    }
     notifyStateChanged();
 }
 

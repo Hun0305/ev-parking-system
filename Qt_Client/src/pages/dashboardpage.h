@@ -34,20 +34,23 @@ public:
     void prependEvent(const MonitoringEvent &event);
     void setRtspUrls(const QStringList &lowRtspUrls, const QStringList &highRtspUrls);
     QImage currentRtspFrame(int channelIndex) const;
+    bool showExpandedChannel(const QString &channel);
 
 signals:
     void rtspDiagnosticsChanged(const QList<RtspChannelDiagnostic> &channels);
     void eventEvidenceRequested(const QString &eventId);
+    void recentEventsDetailRequested();
 
 private slots:
     void handleVideoChannelClicked();
 
 private:
     void showHelpDialog();
-    QWidget *createVideoChannel(int channelIndex, const QString &channel, const QString &title,
+    QWidget *createVideoChannel(int channelIndex, const QString &channel,
                                 const QString &lowRtspUrl, const QString &highRtspUrl);
     void startDelayedVideoStreams();
     void toggleVideoChannel(int channelIndex);
+    void applyVideoChannelLayout();
     void publishRtspDiagnostics();
 
     QGridLayout *m_videoGrid = nullptr;

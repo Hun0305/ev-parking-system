@@ -1,4 +1,5 @@
 #include "apiclient.h"
+#include "urlorigin.h"
 
 #include <QJsonParseError>
 #include <QDateTime>
@@ -17,6 +18,17 @@ ApiClient::ApiClient(const QUrl &baseUrl,
     , m_timeoutMs(timeoutMs > 0 ? timeoutMs : 5000)
     , m_allowInsecureHttp(allowInsecureHttp)
 {
+}
+
+void ApiClient::setBearerAuthentication(const QUrl &fixedLoginOrigin,
+                                        const QByteArray &token)
+{
+    m_authenticatedServerOrigin =
+        UrlOrigin::normalizedHttpOrigin(fixedLoginOrigin);
+    m_bearerToken = token;
+    if (m_bearerToken.contains('\r') || m_bearerToken.contains('\n')) {
+        m_bearerToken.clear();
+    }
 }
 
 void ApiClient::getJson(const QString &path)
@@ -61,7 +73,15 @@ void ApiClient::sendJsonRequest(const QString &path, const QByteArray &method,
     }
 
     QNetworkRequest request(url);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::SameOriginRedirectPolicy);
     request.setRawHeader("Accept", "application/json");
+    const bool bearerAuthenticationAttached = !m_bearerToken.isEmpty()
+        && UrlOrigin::sameHttpOrigin(url, m_authenticatedServerOrigin);
+    if (bearerAuthenticationAttached) {
+        request.setRawHeader("Authorization",
+                             QByteArrayLiteral("Bearer ") + m_bearerToken);
+    }
     if (!body.isEmpty()) {
         request.setHeader(QNetworkRequest::ContentTypeHeader,
                           QStringLiteral("application/json"));
@@ -80,7 +100,8 @@ void ApiClient::sendJsonRequest(const QString &path, const QByteArray &method,
     timeout->start(m_timeoutMs);
 
     connect(reply, &QNetworkReply::finished, this,
-            [this, reply, timeout, path, requestTag, startedAtMs]() {
+            [this, reply, timeout, path, requestTag, startedAtMs,
+             bearerAuthenticationAttached]() {
         timeout->stop();
         const int latencyMs = static_cast<int>(
             qMax<qint64>(0, QDateTime::currentMSecsSinceEpoch() - startedAtMs));
@@ -110,6 +131,11 @@ void ApiClient::sendJsonRequest(const QString &path, const QByteArray &method,
             return;
         }
         if (statusCode < 200 || statusCode >= 300) {
+            if (statusCode == 401 && bearerAuthenticationAttached) {
+                emit authenticationRequired();
+                reply->deleteLater();
+                return;
+            }
             QString message = QStringLiteral("HTTP %1").arg(statusCode);
             QJsonParseError errorParseResult;
             const QJsonDocument errorDocument = QJsonDocument::fromJson(

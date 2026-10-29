@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QImage>
+#include <QMouseEvent>
 
 #include <iostream>
 
@@ -52,7 +53,59 @@ int main(int argc, char *argv[])
     area.areaCoordinates = points;
     canvas.setAreas({area});
     canvas.setSelectedAreaIndex(1);
+    canvas.setFrame(QImage(1296, 760, QImage::Format_RGB32));
+    canvas.setEditMode(true);
+    canvas.show();
+    app.processEvents();
 
-    std::cout << "PASS: IVA video canvas maps rectangle coordinates and blocks unsafe aspect ratios\n";
+    QRectF editedRectangle;
+    QObject::connect(&canvas, &IvaVideoCanvas::rectangleEdited,
+                     [&](const QRectF &rectangle) { editedRectangle = rectangle; });
+    const QPoint moveStart = canvas.mapFromScene(QPointF(400, 900));
+    const QPoint moveEnd = canvas.mapFromScene(QPointF(500, 950));
+    QMouseEvent moveHover(QEvent::MouseMove, QPointF(moveStart), Qt::NoButton,
+                          Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas.viewport(), &moveHover);
+    if (!require(canvas.cursor().shape() == Qt::OpenHandCursor,
+                 "hovering inside the selected IVA box must show an open hand")) return 1;
+    QMouseEvent movePress(QEvent::MouseButtonPress, QPointF(moveStart),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas.viewport(), &movePress);
+    if (!require(canvas.cursor().shape() == Qt::ClosedHandCursor,
+                 "pressing inside the selected IVA box must show a closed hand")) return 1;
+    QMouseEvent moveEvent(QEvent::MouseMove, QPointF(moveEnd), Qt::NoButton,
+                          Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas.viewport(), &moveEvent);
+    QMouseEvent moveRelease(QEvent::MouseButtonRelease, QPointF(moveEnd),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas.viewport(), &moveRelease);
+    if (!require(qAbs(editedRectangle.x() - 190.0) < 3.0
+                     && qAbs(editedRectangle.y() - 583.0) < 3.0,
+                 "dragging the selected IVA box must move the whole rectangle")) return 1;
+
+    area.areaCoordinates = IvaVideoCanvas::rectangleCoordinates(editedRectangle);
+    canvas.setAreas({area});
+    canvas.setSelectedAreaIndex(1);
+    const QPoint vertexStart = canvas.mapFromScene(QPointF(190, 583));
+    const QPoint vertexEnd = canvas.mapFromScene(QPointF(220, 620));
+    QMouseEvent vertexHover(QEvent::MouseMove, QPointF(vertexStart), Qt::NoButton,
+                            Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas.viewport(), &vertexHover);
+    if (!require(canvas.cursor().shape() == Qt::SizeFDiagCursor,
+                 "hovering the top-left IVA corner must show a diagonal resize cursor")) return 1;
+    QMouseEvent vertexPress(QEvent::MouseButtonPress, QPointF(vertexStart),
+                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas.viewport(), &vertexPress);
+    QMouseEvent vertexMove(QEvent::MouseMove, QPointF(vertexEnd), Qt::NoButton,
+                           Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas.viewport(), &vertexMove);
+    QMouseEvent vertexRelease(QEvent::MouseButtonRelease, QPointF(vertexEnd),
+                              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas.viewport(), &vertexRelease);
+    if (!require(qAbs(editedRectangle.x() - 220.0) < 3.0
+                     && qAbs(editedRectangle.y() - 620.0) < 3.0,
+                 "dragging an IVA corner must redraw the rectangle from that vertex")) return 1;
+
+    std::cout << "PASS: IVA video canvas maps rectangles, edits boxes, and blocks unsafe aspect ratios\n";
     return 0;
 }

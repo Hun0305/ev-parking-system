@@ -44,6 +44,7 @@ private:
     void renderRtspDiagnostics();
     void renderParkingDiagnostic();
     void refreshLogFilter();
+    void updateLogStatePresentation();
 
     ApiDiagnosticState m_apiState;
     QList<RtspChannelDiagnostic> m_rtspChannels;
@@ -67,6 +68,7 @@ private:
     QLabel *m_parkingDetailLabel = nullptr;
     QTableWidget *m_streamTable = nullptr;
     QTableWidget *m_logTable = nullptr;
+    QLabel *m_logStateLabel = nullptr;
     QComboBox *m_levelFilter = nullptr;
     QComboBox *m_moduleFilter = nullptr;
     QLineEdit *m_logSearch = nullptr;

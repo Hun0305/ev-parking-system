@@ -9,6 +9,7 @@
 struct ParkingCaptureGroup
 {
     qint64 imageId = -1;
+    qint64 sessionId = -1;
     QDateTime timestamp;
     QString reason;
     QString ocrResult;

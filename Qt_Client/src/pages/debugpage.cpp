@@ -3,6 +3,7 @@
 #include "widgets/pagehelp.h"
 
 #include <QCheckBox>
+#include <QColor>
 #include <QComboBox>
 #include <QDateTime>
 #include <QFrame>
@@ -13,6 +14,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -86,12 +88,27 @@ DebugPage::DebugPage(QWidget *parent)
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(10);
+    layout->addLayout(createPageHeader(
+        this, QStringLiteral("Debug"),
+        QStringLiteral("Inspect runtime connections and test scenarios")));
+
+    auto *environmentBanner = new QLabel(
+        QStringLiteral("DEVELOPMENT & DIAGNOSTICS · Review each action's impact scope before running it."),
+        this);
+    environmentBanner->setObjectName(QStringLiteral("debugEnvironmentBanner"));
+    environmentBanner->setWordWrap(true);
+    environmentBanner->setStyleSheet(QStringLiteral(
+        "background:#e3f2fd;color:#0d47a1;border:1px solid #90caf9;"
+        "border-radius:7px;padding:9px;font-weight:800;"));
+    layout->addWidget(environmentBanner);
     auto *tabs = new QTabWidget(this);
+    tabs->setObjectName(QStringLiteral("debugTabWidget"));
     tabs->addTab(createOverviewTab(), QStringLiteral("Overview"));
     tabs->addTab(createLogsTab(), QStringLiteral("Live Logs"));
     tabs->addTab(createTestToolsTab(), QStringLiteral("Test Tools"));
-    tabs->setCornerWidget(createPageHelpButton(
-        this, tabs,
+    createPageHelpButton(
+        this, this,
         {QStringLiteral("debug"), QStringLiteral("Debug"),
          QStringLiteral("Debug 사용 안내"),
          QStringLiteral("Pi API, RTSP, 주차 데이터의 상태를 진단하고 로컬 테스트 시나리오를 실행합니다."),
@@ -102,7 +119,7 @@ DebugPage::DebugPage(QWidget *parent)
              "<b>4. Manual message</b><br><i>RX message</i>에 정규화 메시지를 입력하고 <i>Inject locally</i>로 parser와 화면 반영을 시험합니다."),
          QStringLiteral(
              "※ Test Tools와 Inject locally는 Pi 서버로 전송되지 않는 로컬 simulation sandbox입니다. 실제 장비 통합 성공 증거로 사용하지 마세요.\n"
-             "   시뮬레이션 후 Runtime data가 MIXED로 표시될 수 있습니다.")}));
+             "   시뮬레이션 후 Runtime data가 MIXED로 표시될 수 있습니다.")});
     layout->addWidget(tabs);
 
     m_ageRefreshTimer = new QTimer(this);
@@ -119,9 +136,18 @@ DebugPage::DebugPage(QWidget *parent)
 QWidget *DebugPage::createOverviewTab()
 {
     auto *tab = new QWidget(this);
-    auto *layout = new QVBoxLayout(tab);
+    auto *tabLayout = new QVBoxLayout(tab);
+    tabLayout->setContentsMargins(0, 0, 0, 0);
+    auto *scrollArea = new QScrollArea(tab);
+    scrollArea->setObjectName(QStringLiteral("debugOverviewScrollArea"));
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    auto *content = new QWidget(scrollArea);
+    auto *layout = new QVBoxLayout(content);
     layout->setContentsMargins(8, 10, 8, 8);
     layout->setSpacing(10);
+    scrollArea->setWidget(content);
+    tabLayout->addWidget(scrollArea);
 
     auto *summary = new QWidget(tab);
     auto *summaryLayout = new QGridLayout(summary);
@@ -130,10 +156,13 @@ QWidget *DebugPage::createOverviewTab()
     auto addCard = [summaryLayout, summary](int column, const QString &title,
                                             QLabel **valueLabel, QLabel **detailLabel) {
         auto *card = new QFrame(summary);
+        card->setObjectName(QStringLiteral("debugSummaryCard%1").arg(column));
         card->setFrameShape(QFrame::StyledPanel);
         card->setStyleSheet(QStringLiteral(
-            "QFrame { background:white; border:1px solid #cfd8dc; border-radius:7px; }"));
+            "QFrame { background:white; border:1px solid #cfd8dc; border-radius:6px; }"));
         auto *cardLayout = new QVBoxLayout(card);
+        cardLayout->setContentsMargins(8, 7, 8, 7);
+        cardLayout->setSpacing(2);
         auto *titleLabel = new QLabel(title, card);
         titleLabel->setStyleSheet(QStringLiteral("color:#607d8b;font-weight:700;"));
         *valueLabel = new QLabel(QStringLiteral("-"), card);
@@ -154,7 +183,19 @@ QWidget *DebugPage::createOverviewTab()
     layout->addWidget(summary);
 
     auto *apiGroup = new QGroupBox(QStringLiteral("Pi API Diagnostics"), tab);
-    auto *apiGrid = new QGridLayout(apiGroup);
+    auto *apiLayout = new QVBoxLayout(apiGroup);
+    apiLayout->setContentsMargins(8, 10, 8, 8);
+    apiLayout->setSpacing(8);
+    auto *apiImpact = new QLabel(
+        QStringLiteral("SERVER/API CONNECTION · Reconnect now starts a real server request from this client."),
+        apiGroup);
+    apiImpact->setObjectName(QStringLiteral("debugApiImpactLabel"));
+    apiImpact->setWordWrap(true);
+    apiImpact->setStyleSheet(QStringLiteral(
+        "background:#e3f2fd;color:#0d47a1;border:1px solid #90caf9;"
+        "border-radius:5px;padding:7px;font-weight:700;"));
+    apiLayout->addWidget(apiImpact);
+    auto *apiGrid = new QGridLayout;
     m_apiEndpointLabel = new QLabel(QStringLiteral("-"), apiGroup);
     m_apiStatusLabel = new QLabel(QStringLiteral("DISABLED"), apiGroup);
     m_apiLatencyLabel = new QLabel(QStringLiteral("-"), apiGroup);
@@ -163,6 +204,14 @@ QWidget *DebugPage::createOverviewTab()
     m_apiErrorLabel = new QLabel(QStringLiteral("-"), apiGroup);
     m_apiErrorLabel->setWordWrap(true);
     auto *reconnectButton = new QPushButton(QStringLiteral("Reconnect now"), apiGroup);
+    reconnectButton->setObjectName(QStringLiteral("debugReconnectApiButton"));
+    reconnectButton->setProperty("impactScope", QStringLiteral("SERVER_API"));
+    reconnectButton->setToolTip(QStringLiteral(
+        "Starts a real API connection attempt using the configured server endpoint"));
+    reconnectButton->setStyleSheet(QStringLiteral(
+        "QPushButton { background:#263238;color:white;border:1px solid #455a64;"
+        "border-radius:5px;padding:7px 12px;font-weight:800; }"
+        "QPushButton:hover { background:#37474f;border-color:#fb8c00; }"));
     apiGrid->addWidget(new QLabel(QStringLiteral("Endpoint"), apiGroup), 0, 0);
     apiGrid->addWidget(m_apiEndpointLabel, 0, 1);
     apiGrid->addWidget(new QLabel(QStringLiteral("State"), apiGroup), 1, 0);
@@ -178,6 +227,7 @@ QWidget *DebugPage::createOverviewTab()
     apiGrid->addWidget(reconnectButton, 0, 4, 3, 1);
     apiGrid->setColumnStretch(1, 1);
     apiGrid->setColumnStretch(3, 2);
+    apiLayout->addLayout(apiGrid);
     connect(reconnectButton, &QPushButton::clicked,
             this, &DebugPage::reconnectApiRequested);
     layout->addWidget(apiGroup);
@@ -185,6 +235,7 @@ QWidget *DebugPage::createOverviewTab()
     auto *streamGroup = new QGroupBox(QStringLiteral("RTSP Channel Diagnostics"), tab);
     auto *streamLayout = new QVBoxLayout(streamGroup);
     m_streamTable = new QTableWidget(4, 7, streamGroup);
+    m_streamTable->setObjectName(QStringLiteral("debugStreamTable"));
     m_streamTable->setHorizontalHeaderLabels({
         QStringLiteral("Channel"), QStringLiteral("Configured"), QStringLiteral("State"),
         QStringLiteral("Resolution"), QStringLiteral("Startup"), QStringLiteral("Frame age"),
@@ -194,6 +245,12 @@ QWidget *DebugPage::createOverviewTab()
     m_streamTable->verticalHeader()->setVisible(false);
     m_streamTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_streamTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_streamTable->setAlternatingRowColors(true);
+    m_streamTable->setStyleSheet(QStringLiteral(
+        "QTableWidget { background:#f8fafb;alternate-background-color:#eef3f6;"
+        "border:1px solid #c7d0d8;gridline-color:#d7e0e6; }"
+        "QTableWidget::item { padding:4px 6px; }"
+        "QTableWidget::item:selected { background:#dceaf5;color:#10212c; }"));
     streamLayout->addWidget(m_streamTable);
     layout->addWidget(streamGroup, 1);
 
@@ -211,27 +268,64 @@ QWidget *DebugPage::createLogsTab()
     auto *tab = new QWidget(this);
     auto *layout = new QVBoxLayout(tab);
     layout->setContentsMargins(8, 10, 8, 8);
+    layout->setSpacing(8);
+    auto *scopeLabel = new QLabel(
+        QStringLiteral("READ ONLY · Local diagnostic history. Clearing this view does not clear server or device logs."),
+        tab);
+    scopeLabel->setObjectName(QStringLiteral("debugLogsImpactLabel"));
+    scopeLabel->setWordWrap(true);
+    scopeLabel->setStyleSheet(QStringLiteral(
+        "background:#f8fafb;color:#546e7a;border:1px solid #cfd8dc;"
+        "border-radius:6px;padding:8px;font-weight:700;"));
+    layout->addWidget(scopeLabel);
+
+    auto *filterPanel = new QFrame(tab);
+    filterPanel->setObjectName(QStringLiteral("debugLogFilterPanel"));
+    filterPanel->setStyleSheet(QStringLiteral(
+        "QFrame#debugLogFilterPanel { background:#f8fafb;border:1px solid #c7d0d8;"
+        "border-radius:6px; }"));
+    auto *filterPanelLayout = new QVBoxLayout(filterPanel);
+    filterPanelLayout->setContentsMargins(8, 7, 8, 7);
+    filterPanelLayout->setSpacing(7);
     auto *filters = new QHBoxLayout;
     m_levelFilter = new QComboBox(tab);
+    m_levelFilter->setObjectName(QStringLiteral("debugLogLevelFilter"));
     m_levelFilter->addItems({QStringLiteral("All levels"), QStringLiteral("INFO"),
                              QStringLiteral("WARN"), QStringLiteral("ERROR")});
     m_moduleFilter = new QComboBox(tab);
+    m_moduleFilter->setObjectName(QStringLiteral("debugLogModuleFilter"));
     m_moduleFilter->addItems({QStringLiteral("All modules"), QStringLiteral("API"),
                               QStringLiteral("RTSP"), QStringLiteral("EVENT"),
                               QStringLiteral("SIMULATION")});
     m_logSearch = new QLineEdit(tab);
+    m_logSearch->setObjectName(QStringLiteral("debugLogSearchEdit"));
     m_logSearch->setPlaceholderText(QStringLiteral("Search code or message"));
     m_autoScrollCheck = new QCheckBox(QStringLiteral("Auto scroll"), tab);
+    m_autoScrollCheck->setObjectName(QStringLiteral("debugLogAutoScrollCheck"));
     m_autoScrollCheck->setChecked(true);
     auto *clearButton = new QPushButton(QStringLiteral("Clear view"), tab);
+    clearButton->setObjectName(QStringLiteral("debugLogClearButton"));
     filters->addWidget(m_levelFilter);
     filters->addWidget(m_moduleFilter);
-    filters->addWidget(m_logSearch, 1);
     filters->addWidget(m_autoScrollCheck);
-    filters->addWidget(clearButton);
-    layout->addLayout(filters);
+    filters->addStretch();
+    filterPanelLayout->addLayout(filters);
+    auto *searchRow = new QHBoxLayout;
+    searchRow->addWidget(m_logSearch, 1);
+    searchRow->addWidget(clearButton);
+    filterPanelLayout->addLayout(searchRow);
+    layout->addWidget(filterPanel);
+
+    m_logStateLabel = new QLabel(
+        QStringLiteral("No diagnostic logs received yet."), tab);
+    m_logStateLabel->setObjectName(QStringLiteral("debugLogStateLabel"));
+    m_logStateLabel->setStyleSheet(QStringLiteral(
+        "background:#f8fafb;color:#607d8b;border:1px solid #cfd8dc;"
+        "border-radius:6px;padding:8px;font-weight:700;"));
+    layout->addWidget(m_logStateLabel);
 
     m_logTable = new QTableWidget(0, 5, tab);
+    m_logTable->setObjectName(QStringLiteral("debugLogTable"));
     m_logTable->setHorizontalHeaderLabels({QStringLiteral("Time"), QStringLiteral("Level"),
                                            QStringLiteral("Module"), QStringLiteral("Code"),
                                            QStringLiteral("Message")});
@@ -240,6 +334,12 @@ QWidget *DebugPage::createLogsTab()
     m_logTable->verticalHeader()->setVisible(false);
     m_logTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_logTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_logTable->setAlternatingRowColors(true);
+    m_logTable->setStyleSheet(QStringLiteral(
+        "QTableWidget { background:#f8fafb;alternate-background-color:#eef3f6;"
+        "border:1px solid #c7d0d8;gridline-color:#d7e0e6; }"
+        "QTableWidget::item { padding:4px 6px; }"
+        "QTableWidget::item:selected { background:#dceaf5;color:#10212c; }"));
     layout->addWidget(m_logTable, 1);
 
     connect(m_levelFilter, &QComboBox::currentTextChanged,
@@ -251,6 +351,7 @@ QWidget *DebugPage::createLogsTab()
     connect(clearButton, &QPushButton::clicked, this, [this]() {
         m_logs.clear();
         m_logTable->setRowCount(0);
+        updateLogStatePresentation();
     });
     return tab;
 }
@@ -258,43 +359,89 @@ QWidget *DebugPage::createLogsTab()
 QWidget *DebugPage::createTestToolsTab()
 {
     auto *tab = new QWidget(this);
-    auto *layout = new QVBoxLayout(tab);
+    auto *tabLayout = new QVBoxLayout(tab);
+    tabLayout->setContentsMargins(0, 0, 0, 0);
+    auto *scrollArea = new QScrollArea(tab);
+    scrollArea->setObjectName(QStringLiteral("debugTestToolsScrollArea"));
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    auto *content = new QWidget(scrollArea);
+    auto *layout = new QVBoxLayout(content);
     layout->setContentsMargins(8, 10, 8, 8);
+    layout->setSpacing(10);
+    scrollArea->setWidget(content);
+    tabLayout->addWidget(scrollArea);
 
     auto *notice = new QLabel(
         QStringLiteral("Simulation sandbox: these actions update only the local Qt state and are never sent to the Pi server."),
         tab);
+    notice->setObjectName(QStringLiteral("debugSimulationNotice"));
     notice->setWordWrap(true);
     notice->setStyleSheet(QStringLiteral(
         "background:#fff3e0;color:#e65100;border:1px solid #ffcc80;border-radius:5px;padding:8px;font-weight:700;"));
     layout->addWidget(notice);
 
-    auto *controls = new QGroupBox(QStringLiteral("Simulation Scenarios"), tab);
+    auto *controls = new QGroupBox(QStringLiteral("Local Qt State Actions"), tab);
+    controls->setObjectName(QStringLiteral("debugLocalStateGroup"));
     auto *grid = new QGridLayout(controls);
     auto *clearButton = new QPushButton(QStringLiteral("Acknowledge alarms"), controls);
     auto *mockButton = new QPushButton(QStringLiteral("Toggle mock EV"), controls);
-    auto *nonEvButton = new QPushButton(QStringLiteral("Non-EV violation"), controls);
-    auto *overtimeButton = new QPushButton(QStringLiteral("Overstay warning"), controls);
-    auto *sensorButton = new QPushButton(QStringLiteral("Hall sensor error"), controls);
     auto *randomButton = new QPushButton(QStringLiteral("Randomize parking"), controls);
-    auto *sampleButton = new QPushButton(QStringLiteral("Run normalized RX samples"), controls);
-    grid->addWidget(clearButton, 0, 0); grid->addWidget(mockButton, 0, 1);
-    grid->addWidget(nonEvButton, 1, 0); grid->addWidget(overtimeButton, 1, 1);
-    grid->addWidget(sensorButton, 2, 0); grid->addWidget(randomButton, 2, 1);
-    grid->addWidget(sampleButton, 3, 0, 1, 2);
+    clearButton->setObjectName(QStringLiteral("debugAcknowledgeAlarmsButton"));
+    mockButton->setObjectName(QStringLiteral("debugToggleMockEvButton"));
+    randomButton->setObjectName(QStringLiteral("debugRandomizeParkingButton"));
+    for (QPushButton *button : {clearButton, mockButton, randomButton}) {
+        button->setProperty("impactScope", QStringLiteral("LOCAL_QT_STATE"));
+        button->setToolTip(QStringLiteral(
+            "Updates the local Qt runtime only; no command is sent to the Pi server"));
+    }
+    grid->addWidget(clearButton, 0, 0);
+    grid->addWidget(mockButton, 0, 1);
+    grid->addWidget(randomButton, 1, 0, 1, 2);
     layout->addWidget(controls);
+
+    auto *eventControls = new QGroupBox(QStringLiteral("Local Test Event Publication"), tab);
+    eventControls->setObjectName(QStringLiteral("debugLocalEventGroup"));
+    auto *eventGrid = new QGridLayout(eventControls);
+    auto *nonEvButton = new QPushButton(QStringLiteral("Non-EV violation"), eventControls);
+    auto *overtimeButton = new QPushButton(QStringLiteral("Overstay warning"), eventControls);
+    auto *sensorButton = new QPushButton(QStringLiteral("Hall sensor error"), eventControls);
+    auto *sampleButton = new QPushButton(QStringLiteral("Run normalized RX samples"), eventControls);
+    nonEvButton->setObjectName(QStringLiteral("debugNonEvAlertButton"));
+    overtimeButton->setObjectName(QStringLiteral("debugOverstayAlertButton"));
+    sensorButton->setObjectName(QStringLiteral("debugSensorErrorButton"));
+    sampleButton->setObjectName(QStringLiteral("debugSampleMessagesButton"));
+    for (QPushButton *button : {nonEvButton, overtimeButton, sensorButton, sampleButton}) {
+        button->setProperty("impactScope", QStringLiteral("LOCAL_TEST_EVENT"));
+        button->setToolTip(QStringLiteral(
+            "Publishes a test event inside the local Qt process only"));
+    }
+    eventGrid->addWidget(nonEvButton, 0, 0);
+    eventGrid->addWidget(overtimeButton, 0, 1);
+    eventGrid->addWidget(sensorButton, 1, 0);
+    eventGrid->addWidget(sampleButton, 1, 1);
+    layout->addWidget(eventControls);
 
     auto *messageGroup = new QGroupBox(QStringLiteral("Manual Normalized RX Message"), tab);
     auto *messageLayout = new QHBoxLayout(messageGroup);
     m_messageInput = new QLineEdit(QStringLiteral("EV_ALERT,EV01,NON_EV"), messageGroup);
+    m_messageInput->setObjectName(QStringLiteral("debugManualMessageEdit"));
     m_messageInput->setPlaceholderText(QStringLiteral("Example: PARKING_SLOT,P01,OCCUPIED"));
     auto *applyButton = new QPushButton(QStringLiteral("Inject locally"), messageGroup);
+    applyButton->setObjectName(QStringLiteral("debugManualInjectButton"));
+    applyButton->setProperty("impactScope", QStringLiteral("LOCAL_TEST_EVENT"));
+    applyButton->setToolTip(QStringLiteral(
+        "Injects this normalized message into the local Qt parser only"));
     messageLayout->addWidget(new QLabel(QStringLiteral("RX message"), messageGroup));
     messageLayout->addWidget(m_messageInput, 1);
     messageLayout->addWidget(applyButton);
     layout->addWidget(messageGroup);
     m_lastMessageLabel = new QLabel(QStringLiteral("Last RX: -"), tab);
-    m_lastMessageLabel->setStyleSheet(QStringLiteral("color:#455a64;font-size:12px;"));
+    m_lastMessageLabel->setObjectName(QStringLiteral("debugLastMessageLabel"));
+    m_lastMessageLabel->setWordWrap(true);
+    m_lastMessageLabel->setStyleSheet(QStringLiteral(
+        "background:#f8fafb;color:#455a64;border:1px solid #cfd8dc;"
+        "border-radius:5px;padding:7px;font-size:12px;"));
     layout->addWidget(m_lastMessageLabel);
     layout->addStretch();
 
@@ -343,10 +490,20 @@ void DebugPage::appendDiagnosticLog(const DiagnosticLogRecord &record)
         record.occurredAt.toString(QStringLiteral("HH:mm:ss.zzz")), record.level,
         record.module, record.code, record.message};
     for (int column = 0; column < values.size(); ++column) {
-        m_logTable->setItem(0, column, new QTableWidgetItem(values.at(column)));
+        auto *item = new QTableWidgetItem(values.at(column));
+        const QString level = record.level.trimmed().toUpper();
+        if (level == QStringLiteral("ERROR")) {
+            item->setBackground(QColor(QStringLiteral("#ffebee")));
+            item->setForeground(QColor(QStringLiteral("#b71c1c")));
+        } else if (level == QStringLiteral("WARN")) {
+            item->setBackground(QColor(QStringLiteral("#fff3e0")));
+            item->setForeground(QColor(QStringLiteral("#e65100")));
+        }
+        m_logTable->setItem(0, column, item);
     }
     while (m_logTable->rowCount() > 1000) m_logTable->removeRow(1000);
     refreshLogFilter();
+    updateLogStatePresentation();
     if (m_autoScrollCheck && m_autoScrollCheck->isChecked()) m_logTable->scrollToTop();
 }
 
@@ -468,5 +625,16 @@ void DebugPage::refreshLogFilter()
             && (module == QStringLiteral("All modules") || module == rowModule)
             && (search.isEmpty() || searchable.contains(search, Qt::CaseInsensitive));
         m_logTable->setRowHidden(row, !visible);
+    }
+}
+
+void DebugPage::updateLogStatePresentation()
+{
+    if (!m_logStateLabel || !m_logTable) return;
+    if (m_logTable->rowCount() == 0) {
+        m_logStateLabel->setText(QStringLiteral("No diagnostic logs received yet."));
+        m_logStateLabel->show();
+    } else {
+        m_logStateLabel->hide();
     }
 }

@@ -62,9 +62,10 @@ private slots:
     void handleDecodedFrame(const QImage &image, int startupDelayMs, qint64 frameTimestampMs,
                             qint64 frameWallClockMs);
     void deliverPendingFrame();
-    void handleStatusChanged(const QString &status);
-    void handleErrorChanged(const QString &message);
-    void handleStreamFailure(const QString &source, const QString &message);
+    void handleStatusChanged(quint64 generation, const QString &status);
+    void handleErrorChanged(quint64 generation, const QString &message);
+    void handleStreamFailure(quint64 generation, const QString &source,
+                             const QString &message);
 
 private:
     struct WorkerState;
@@ -77,8 +78,9 @@ private:
     void setVideoSize(const QSize &size);
     void setStartupDelayMs(int delayMs);
     void queueDecodedFrame(QImage image, int startupDelayMs, qint64 frameTimestampMs,
-                           qint64 frameWallClockMs);
-    void decodeLoop(QString source, std::shared_ptr<WorkerState> state);
+                           qint64 frameWallClockMs, quint64 generation);
+    void decodeLoop(QString source, std::shared_ptr<WorkerState> state,
+                    quint64 generation);
 
     mutable QMutex m_mutex;
     QString m_source;
@@ -88,11 +90,13 @@ private:
     int m_startupDelayMs = -1;
     qint64 m_frameTimestampMs = -1;
     qint64 m_frameWallClockMs = -1;
+    quint64 m_streamGeneration = 0;
     QImage m_frame;
     QImage m_pendingFrame;
     int m_pendingStartupDelayMs = -1;
     qint64 m_pendingFrameTimestampMs = -1;
     qint64 m_pendingFrameWallClockMs = -1;
+    quint64 m_pendingGeneration = 0;
     std::atomic_bool m_frameDeliveryQueued { false };
 
     std::thread m_worker;

@@ -27,6 +27,31 @@ struct PageHelpSpec
     QString note;
 };
 
+inline QHBoxLayout *createPageHeader(QWidget *page, const QString &title,
+                                     const QString &subtitle = QString())
+{
+    auto *header = new QHBoxLayout;
+    header->setContentsMargins(0, 0, 0, 0);
+    header->setSpacing(8);
+
+    auto *titleLabel = new QLabel(title, page);
+    titleLabel->setObjectName(QStringLiteral("pageTitleLabel"));
+    titleLabel->setStyleSheet(QStringLiteral(
+        "font-size:22px;font-weight:800;color:#202124;"));
+    header->addWidget(titleLabel);
+
+    if (!subtitle.trimmed().isEmpty()) {
+        auto *subtitleLabel = new QLabel(subtitle, page);
+        subtitleLabel->setObjectName(QStringLiteral("pageSubtitleLabel"));
+        subtitleLabel->setStyleSheet(QStringLiteral(
+            "color:#607d8b;font-size:12px;font-weight:600;"));
+        header->addWidget(subtitleLabel);
+    }
+
+    header->addStretch();
+    return header;
+}
+
 inline QIcon pageHelpIcon()
 {
     constexpr qreal scale = 2.0;

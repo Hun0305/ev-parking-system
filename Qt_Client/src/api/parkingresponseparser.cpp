@@ -147,7 +147,10 @@ bool parseSlotObject(const QJsonObject &item,
             if (!value.isObject()) {
                 continue;
             }
-            const ParkingImageResource image = imageFromObject(value.toObject(), {}, {});
+            ParkingImageResource image = imageFromObject(value.toObject(), {}, {});
+            if (image.sessionId <= 0 && parsed.sessionId > 0) {
+                image.sessionId = parsed.sessionId;
+            }
             if (!image.url.isEmpty()) {
                 parsed.images.append(image);
             }
@@ -155,19 +158,25 @@ bool parseSlotObject(const QJsonObject &item,
     } else if (imageArrayValue.isObject()) {
         const QJsonObject images = imageArrayValue.toObject();
         if (images.value(QStringLiteral("before")).isObject()) {
-            const ParkingImageResource image = imageFromObject(
+            ParkingImageResource image = imageFromObject(
                 images.value(QStringLiteral("before")).toObject(),
                 QStringLiteral("VEHICLE"),
                 QStringLiteral("ORIGINAL"));
+            if (image.sessionId <= 0 && parsed.sessionId > 0) {
+                image.sessionId = parsed.sessionId;
+            }
             if (!image.url.isEmpty()) {
                 parsed.images.append(image);
             }
         }
         if (images.value(QStringLiteral("after")).isObject()) {
-            const ParkingImageResource image = imageFromObject(
+            ParkingImageResource image = imageFromObject(
                 images.value(QStringLiteral("after")).toObject(),
                 QStringLiteral("VEHICLE"),
                 QStringLiteral("ORIGINAL"));
+            if (image.sessionId <= 0 && parsed.sessionId > 0) {
+                image.sessionId = parsed.sessionId;
+            }
             if (!image.url.isEmpty()) {
                 parsed.images.append(image);
             }
@@ -249,11 +258,18 @@ bool ParkingResponseParser::parseSessionImages(
         return false;
     }
 
-    const QJsonValue itemsValue = document.object().value(QStringLiteral("items"));
+    const QJsonObject response = document.object();
+    const QJsonValue itemsValue = response.value(QStringLiteral("items"));
     if (!itemsValue.isArray()) {
         errorMessage = QStringLiteral("Parking session images response is missing items array");
         return false;
     }
+
+    QJsonValue responseSessionValue = response.value(QStringLiteral("session_id"));
+    if (responseSessionValue.isNull() || responseSessionValue.isUndefined()) {
+        responseSessionValue = response.value(QStringLiteral("sessionId"));
+    }
+    const qint64 responseSessionId = responseSessionValue.toVariant().toLongLong();
 
     QList<ParkingImageResource> parsed;
     for (const QJsonValue &value : itemsValue.toArray()) {
@@ -264,11 +280,17 @@ bool ParkingResponseParser::parseSessionImages(
         const QJsonObject item = value.toObject();
         ParkingImageResource original = sessionImageVariant(
             item, QStringLiteral("original_url"), QStringLiteral("ORIGINAL"));
+        if (original.sessionId <= 0 && responseSessionId > 0) {
+            original.sessionId = responseSessionId;
+        }
         if (!original.url.isEmpty()) {
             parsed.append(original);
         }
         ParkingImageResource enhanced = sessionImageVariant(
             item, QStringLiteral("enhanced_url"), QStringLiteral("ENHANCED"));
+        if (enhanced.sessionId <= 0 && responseSessionId > 0) {
+            enhanced.sessionId = responseSessionId;
+        }
         if (!enhanced.url.isEmpty()) {
             parsed.append(enhanced);
         }

@@ -5,22 +5,23 @@ Item {
     id: root
 
     property string channel: typeof channelName === "undefined" ? "CH" : channelName
-    property string title: typeof channelTitle === "undefined" ? "RTSP" : channelTitle
     property string lowRtspUrl: typeof rtspLowSourceUrl === "undefined" ? "" : rtspLowSourceUrl
     property string highRtspUrl: typeof rtspHighSourceUrl === "undefined" ? lowRtspUrl : rtspHighSourceUrl
     property string sourceLabel: typeof rtspSourceLabel === "undefined" ? "" : rtspSourceLabel
     property bool expanded: typeof channelExpanded === "undefined" ? false : channelExpanded
     property bool streamEnabled: typeof channelStreamEnabled === "undefined" ? false : channelStreamEnabled
-    property bool highQualityEnabled: false
     property bool fireAlarmActive: false
-    readonly property string activeRtspUrl: highQualityEnabled && highRtspUrl !== "" ? highRtspUrl : lowRtspUrl
-    readonly property string qualityLabel: highQualityEnabled ? "High" : "Low"
+    readonly property string activeRtspUrl: lowRtspUrl
     readonly property bool diagnosticConfigured: activeRtspUrl !== ""
     readonly property string diagnosticStatus: videoItem.status
     readonly property string diagnosticError: videoItem.errorString
+    readonly property bool errorVisible: videoItem.errorString !== ""
+        && videoItem.status !== "Playing"
     readonly property size diagnosticVideoSize: videoItem.videoSize
     readonly property int diagnosticStartupDelayMs: videoItem.startupDelayMs
     readonly property double diagnosticFrameWallClockMs: videoItem.frameWallClockMs
+    readonly property bool reconnecting: videoItem.status === "Connecting"
+        || videoItem.status === "Reconnecting"
     signal clicked()
 
     Rectangle {
@@ -47,13 +48,13 @@ Item {
             Column {
                 anchors.left: parent.left
                 anchors.right: parent.right
+                anchors.rightMargin: reconnectIndicator.visible ? 38 : 10
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.leftMargin: 10
-                anchors.rightMargin: 10
                 spacing: 2
 
                 Text {
-                    text: root.channel + " | " + root.title + " | " + root.qualityLabel
+                    text: root.channel
                     color: "#eef2f5"
                     font.pixelSize: root.expanded ? 16 : 14
                     font.bold: true
@@ -62,8 +63,10 @@ Item {
                 }
 
                 Text {
-                    text: root.sourceLabel + " | " + videoItem.status + " | " + videoSpec
-                    color: videoItem.errorString === "" ? "#aeb9c2" : "#ff8a80"
+                    text: root.sourceLabel
+                        + (root.reconnecting ? "" : " | " + videoItem.status)
+                        + " | " + videoSpec
+                    color: root.errorVisible ? "#ff8a80" : "#aeb9c2"
                     font.pixelSize: 11
                     elide: Text.ElideRight
                     width: parent.width
@@ -75,6 +78,33 @@ Item {
                     font.pixelSize: 11
                     elide: Text.ElideRight
                     width: parent.width
+                }
+            }
+
+            Text {
+                id: reconnectIndicator
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.rightMargin: 10
+                text: "↻"
+                visible: root.reconnecting
+                color: "#ffca28"
+                font.pixelSize: 22
+                font.bold: true
+
+                RotationAnimation on rotation {
+                    running: reconnectIndicator.visible
+                    from: 0
+                    to: 360
+                    duration: 850
+                    loops: Animation.Infinite
+                }
+
+                SequentialAnimation on opacity {
+                    running: reconnectIndicator.visible
+                    loops: Animation.Infinite
+                    NumberAnimation { to: 0.35; duration: 420 }
+                    NumberAnimation { to: 1.0; duration: 420 }
                 }
             }
         }
@@ -110,7 +140,7 @@ Item {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             anchors.margins: 10
-            text: root.expanded ? "Click to return" : "Click to expand"
+            text: root.expanded ? "Click to return" : "Click for full-screen"
             color: "#aeb9c2"
             font.pixelSize: 11
         }
@@ -120,8 +150,8 @@ Item {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             anchors.margins: 10
-            text: videoItem.errorString
-            visible: videoItem.errorString !== ""
+            text: root.errorVisible ? videoItem.errorString : ""
+            visible: root.errorVisible
             color: "#ff8a80"
             font.pixelSize: 11
             elide: Text.ElideRight

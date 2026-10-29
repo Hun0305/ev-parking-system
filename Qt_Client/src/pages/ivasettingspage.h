@@ -2,6 +2,7 @@
 
 #include "api/parkingroi.h"
 #include "iva/ivaareamodels.h"
+#include "models/parkingzonelayout.h"
 
 #include <QWidget>
 
@@ -17,6 +18,7 @@ class QShowEvent;
 class QSpinBox;
 class QTableWidget;
 class QTimer;
+class QToolButton;
 class IvaVideoCanvas;
 
 class IvaSettingsPage : public QWidget
@@ -24,9 +26,22 @@ class IvaSettingsPage : public QWidget
     Q_OBJECT
 
 public:
+    enum class PendingChangesDecision {
+        Proceed,
+        Waiting,
+        Cancel,
+    };
+
     explicit IvaSettingsPage(const QString &cameraIp, QWidget *parent = nullptr);
 
+    bool hasPendingChanges() const;
+    PendingChangesDecision confirmPendingChanges();
+    void discardPendingChanges();
     void setCameraIp(const QString &cameraIp);
+    void setParkingZoneMappings(const QList<ParkingZoneLayout> &mappings);
+    void setParkingSelection(const QString &zoneId,
+                             const QString &cameraChannel,
+                             const QString &ivaAreaId);
     void setRequestStarted();
     void setOptions(const IvaAreaOptions &options);
     void setCapabilities(const WiseAiCapabilities &capabilities);
@@ -54,12 +69,19 @@ signals:
     void previewFrameRequested(int channel);
     void piRoiSaveRequested(const QString &slotId, const ParkingRoi &roi,
                             quint64 generation);
+    void pendingChangesSaved();
 
 protected:
     void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;
 
 private:
+    enum class SaveStage {
+        Idle,
+        Camera,
+        Pi,
+    };
+
     static QString durationText(const IvaAreaDefinition &area);
     static QString coordinateText(double value);
     void showHelpDialog();
@@ -76,20 +98,51 @@ private:
     void addCoordinateRow(double x, double y);
     void selectChannel(int channel);
     void selectMappedParkingArea();
+    void selectParkingZoneForArea(int channel, int areaIndex);
+    const ParkingZoneLayout *parkingZoneMapping(const QString &zoneId) const;
+    int cameraChannelIndex(const QString &cameraChannel) const;
     int mappedParkingAreaIndex() const;
     QString mappedParkingAreaName() const;
+    bool editorMatchesParkingArea() const;
     void updateVideoOverlays();
     void createRectangleDraft(const QRectF &sourceRectangle);
+    void updateRectangleDraft(const QRectF &sourceRectangle);
     void discardRectangleDraft();
+    void setCameraSaveFeedback(const QString &message,
+                               const QString &styleSheet);
+    void setEditorState(const QString &text,
+                        const QString &background,
+                        const QString &foreground);
+    void updateEditorSummary();
+    void updateDurationAvailability();
+    void updateChannelButtons();
+    void setEditorDirtyFeedback(bool geometryChanged = false);
+    void startSaveChanges();
+    bool startSaveChangesInternal(bool askConfirmation);
+    void finishPendingSave(bool success);
+    bool requestPiRoiSave();
     void updateButtons();
 
     QString m_cameraIp;
+    QList<ParkingZoneLayout> m_parkingZoneMappings;
+    QString m_selectedParkingZoneId;
+    QString m_selectedParkingChannel;
+    QString m_selectedParkingIvaAreaId;
     IvaAreaConfiguration m_configuration;
+    IvaAreaConfiguration m_savedConfiguration;
     IvaAreaOptions m_options;
     WiseAiCapabilities m_capabilities;
     QLabel *m_cameraLabel = nullptr;
     QLabel *m_channelSummaryLabel = nullptr;
     QLabel *m_statusLabel = nullptr;
+    QLabel *m_areaCountLabel = nullptr;
+    QLabel *m_selectedAreaTitleLabel = nullptr;
+    QLabel *m_selectedAreaMetaLabel = nullptr;
+    QLabel *m_selectedAreaStateLabel = nullptr;
+    QLabel *m_detectionSelectionLabel = nullptr;
+    QLabel *m_objectSelectionLabel = nullptr;
+    QLabel *m_areaMappingLabel = nullptr;
+    QLabel *m_piMappingLabel = nullptr;
     QTableWidget *m_areaTable = nullptr;
     IvaVideoCanvas *m_videoCanvas = nullptr;
     QLabel *m_frameStatusLabel = nullptr;
@@ -99,20 +152,27 @@ private:
     QLineEdit *m_nameEdit = nullptr;
     QListWidget *m_detectionModesList = nullptr;
     QListWidget *m_objectFiltersList = nullptr;
+    QCheckBox *m_allObjectFiltersCheck = nullptr;
+    QLabel *m_appearanceDurationLabel = nullptr;
+    QLabel *m_intrusionDurationLabel = nullptr;
+    QLabel *m_loiteringDurationLabel = nullptr;
     QSpinBox *m_appearanceDurationSpin = nullptr;
     QSpinBox *m_intrusionDurationSpin = nullptr;
     QSpinBox *m_loiteringDurationSpin = nullptr;
     QTableWidget *m_coordinateTable = nullptr;
     QPushButton *m_addPointButton = nullptr;
     QPushButton *m_removePointButton = nullptr;
+    QToolButton *m_geometryToggleButton = nullptr;
+    QWidget *m_geometryWidget = nullptr;
     QPushButton *m_applyButton = nullptr;
     QPushButton *m_deleteAreaButton = nullptr;
+    QLabel *m_cameraSaveStatusLabel = nullptr;
     QPushButton *m_discardDraftButton = nullptr;
     QPushButton *m_refreshButton = nullptr;
     QComboBox *m_piSlotCombo = nullptr;
-    QPushButton *m_sendPiRoiButton = nullptr;
     QLabel *m_piRoiStatusLabel = nullptr;
     QTimer *m_previewTimer = nullptr;
+    QTimer *m_refreshTimer = nullptr;
     int m_selectedArea = -1;
     int m_selectedChannel = 0;
     int m_draftChannel = -1;
@@ -126,8 +186,15 @@ private:
     int m_pendingDeletedAreaIndex = -1;
     QString m_pendingDeletedAreaName;
     bool m_requestInFlight = false;
+    bool m_cameraDirty = false;
+    bool m_piDirty = false;
+    bool m_continueWithPiAfterCamera = false;
+    bool m_cameraSavedBeforePi = false;
+    bool m_pendingLeaveAfterSave = false;
+    SaveStage m_saveStage = SaveStage::Idle;
     bool m_loadedOnce = false;
     bool m_hasOptions = false;
     bool m_hasCapabilities = false;
+    bool m_hasSavedConfiguration = false;
     bool m_updatingEditor = false;
 };

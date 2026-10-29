@@ -17,6 +17,14 @@ int main(int argc, char **argv)
     qmlRegisterType<RtspVideoItem>("Rtsp", 1, 0, "RtspVideoItem");
 
     DashboardPage page(QStringList(4), QStringList(4));
+    QFrame *channel1 = page.findChild<QFrame *>(
+        QStringLiteral("dashboardVideoChannelCH1"));
+    QFrame *channel3 = page.findChild<QFrame *>(
+        QStringLiteral("dashboardVideoChannelCH3"));
+    if (!channel1 || !channel3
+        || !page.showExpandedChannel(QStringLiteral("CH3"))
+        || !channel1->isHidden() || channel3->isHidden()
+        || page.showExpandedChannel(QStringLiteral("CH5"))) return 3;
     QPushButton *helpButton = page.findChild<QPushButton *>(
         QStringLiteral("dashboardHelpButton"));
     if (!helpButton || helpButton->icon().isNull()

@@ -13,7 +13,9 @@ QVector<ParkingCaptureGroup> buildParkingCaptureGroups(
         const ParkingImageResource &image = images.at(index);
         QString key;
         if (image.imageId >= 0) {
-            key = QStringLiteral("id:%1").arg(image.imageId);
+            key = QStringLiteral("session:%1:id:%2")
+                      .arg(image.sessionId)
+                      .arg(image.imageId);
         } else {
             // Role and timestamp describe an image but do not prove that two
             // resources are processing variants of the same capture. Keep
@@ -25,6 +27,7 @@ QVector<ParkingCaptureGroup> buildParkingCaptureGroups(
         if (groupIndex < 0) {
             ParkingCaptureGroup capture;
             capture.imageId = image.imageId;
+            capture.sessionId = image.sessionId;
             capture.timestamp = image.timestamp;
             capture.reason = image.evidenceReason.isEmpty()
                 ? image.role.toUpper() : image.evidenceReason;
@@ -36,6 +39,9 @@ QVector<ParkingCaptureGroup> buildParkingCaptureGroups(
 
         ParkingCaptureGroup &capture = groups[groupIndex];
         capture.variants.append(image);
+        if (capture.sessionId <= 0 && image.sessionId > 0) {
+            capture.sessionId = image.sessionId;
+        }
         if (!capture.timestamp.isValid() && image.timestamp.isValid()) {
             capture.timestamp = image.timestamp;
         }
