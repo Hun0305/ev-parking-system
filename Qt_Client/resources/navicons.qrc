@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/">
+        <file alias="resources/icons/app-icon.png">icons/app-icon.png</file>
         <file alias="resources/icons/dashboard.svg">icons/dashboard.svg</file>
         <file alias="resources/icons/parking-map.svg">icons/parking-map.svg</file>
         <file alias="resources/icons/events.svg">icons/events.svg</file>

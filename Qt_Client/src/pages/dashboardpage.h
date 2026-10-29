@@ -13,6 +13,7 @@
 #include <QWidget>
 
 class QGridLayout;
+class QEvent;
 class QLabel;
 class QQuickWidget;
 class QTableWidget;
@@ -40,6 +41,9 @@ signals:
     void rtspDiagnosticsChanged(const QList<RtspChannelDiagnostic> &channels);
     void eventEvidenceRequested(const QString &eventId);
     void recentEventsDetailRequested();
+
+protected:
+    void changeEvent(QEvent *event) override;
 
 private slots:
     void handleVideoChannelClicked();

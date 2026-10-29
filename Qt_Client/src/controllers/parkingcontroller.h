@@ -216,6 +216,7 @@ private:
     QUrl m_apiBaseUrl;
     QUrl m_authenticatedServerOrigin;
     QByteArray m_bearerToken;
+    QByteArray m_lastApiSyncFingerprint;
     bool m_hasAuthenticatedServerOverride = false;
     bool m_authenticationExpired = false;
     QString m_slotsPath;

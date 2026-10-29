@@ -4,6 +4,10 @@ cmake_minimum_required(VERSION 3.14)
 
 project(smart_parking_qt_client VERSION 0.1 LANGUAGES CXX)
 
+if (WIN32)
+    enable_language(RC)
+endif()
+
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
@@ -120,9 +124,13 @@ add_executable(smart_parking_qt_client
     src/services/notificationcenter.h
     src/services/notificationpolicy.cpp
     src/services/notificationpolicy.h
+    src/services/uifontscale.cpp
+    src/services/uifontscale.h
     src/services/mqttserviceclient.cpp
     src/services/mqttserviceclient.h
     src/widgets/pagehelp.h
+    src/widgets/uifontscalecontrol.cpp
+    src/widgets/uifontscalecontrol.h
     src/simulation/parkingmockdata.cpp
     src/simulation/parkingmockdata.h
     src/simulation/parkingsimulationservice.cpp
@@ -153,6 +161,12 @@ add_executable(smart_parking_qt_client
     rtsp_legacy/RtspVideoItem.cpp
     rtsp_legacy/RtspVideoItem.h
 )
+
+if (WIN32)
+    target_sources(smart_parking_qt_client PRIVATE
+        resources/icons/app-icon.rc
+    )
+endif()
 
 target_link_libraries(smart_parking_qt_client
     PRIVATE
@@ -190,6 +204,7 @@ if (QT_VERSION_MAJOR EQUAL 6)
         PREFIX "/"
         FILES
             resources/icons/dashboard.svg
+            resources/icons/app-icon.png
             resources/icons/parking-map.svg
             resources/icons/events.svg
             resources/icons/evidence.svg
@@ -251,6 +266,8 @@ if (BUILD_TESTING)
         tests/debugpage_help_test.cpp
         src/pages/debugpage.cpp
         src/pages/debugpage.h
+        src/services/uifontscale.cpp
+        src/services/uifontscale.h
     )
     target_include_directories(debugpage_help_test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -592,17 +609,54 @@ if (BUILD_TESTING)
         tests/settingspage_overstay_test.cpp
         src/pages/settingspage.cpp
         src/pages/settingspage.h
+        src/services/uifontscale.cpp
+        src/services/uifontscale.h
     )
     target_include_directories(settingspage_overstay_test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     )
     target_link_libraries(settingspage_overstay_test PRIVATE
         Qt${QT_VERSION_MAJOR}::Widgets
+        Qt${QT_VERSION_MAJOR}::Test
     )
     set_target_properties(settingspage_overstay_test PROPERTIES
         AUTOMOC_COMPILER_PREDEFINES OFF
     )
     add_test(NAME settings_page_overstay COMMAND settingspage_overstay_test)
+
+    add_executable(uifontscale_test
+        tests/uifontscale_test.cpp
+        src/services/uifontscale.cpp
+        src/services/uifontscale.h
+    )
+    target_include_directories(uifontscale_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(uifontscale_test PRIVATE
+        Qt${QT_VERSION_MAJOR}::Widgets
+    )
+    set_target_properties(uifontscale_test PROPERTIES
+        AUTOMOC_COMPILER_PREDEFINES OFF
+    )
+    add_test(NAME ui_font_scale COMMAND uifontscale_test)
+
+    add_executable(uifontscalecontrol_test
+        tests/uifontscalecontrol_test.cpp
+        src/widgets/uifontscalecontrol.cpp
+        src/widgets/uifontscalecontrol.h
+        src/services/uifontscale.cpp
+        src/services/uifontscale.h
+    )
+    target_include_directories(uifontscalecontrol_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(uifontscalecontrol_test PRIVATE
+        Qt${QT_VERSION_MAJOR}::Widgets
+    )
+    set_target_properties(uifontscalecontrol_test PROPERTIES
+        AUTOMOC_COMPILER_PREDEFINES OFF
+    )
+    add_test(NAME ui_font_scale_control COMMAND uifontscalecontrol_test)
 
     add_executable(overstaycontroller_test
         tests/overstaycontroller_test.cpp

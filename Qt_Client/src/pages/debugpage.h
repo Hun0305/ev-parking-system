@@ -10,6 +10,7 @@ class QComboBox;
 class QLabel;
 class QLineEdit;
 class QTableWidget;
+class QTabWidget;
 class QTimer;
 
 class DebugPage : public QWidget
@@ -18,6 +19,7 @@ class DebugPage : public QWidget
 
 public:
     explicit DebugPage(QWidget *parent = nullptr);
+    DebugPage(QTabWidget *systemTabs, QWidget *parent);
 
     void setLastMessage(const QString &message);
     void setApiDiagnostic(const ApiDiagnosticState &state);
@@ -76,6 +78,7 @@ private:
     QLineEdit *m_messageInput = nullptr;
     QLabel *m_lastMessageLabel = nullptr;
     QTimer *m_ageRefreshTimer = nullptr;
+    bool m_embeddedInSystemTabs = false;
 };
 
 #endif

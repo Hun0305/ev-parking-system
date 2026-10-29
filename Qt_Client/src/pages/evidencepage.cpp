@@ -319,6 +319,12 @@ QString slotStateSurface(SlotState state)
     }
 }
 
+QString evidenceSlotStateText(SlotState state)
+{
+    return state == SlotState::NonEvAlert
+        ? QStringLiteral("NONEV") : slotStateText(state);
+}
+
 QString statePillStyle(SlotState state)
 {
     return QStringLiteral(
@@ -345,7 +351,10 @@ QFrame *createMetricCard(QWidget *parent,
         "border:none; color:#607d8b; font-size:11px; font-weight:800;"));
     *valueLabel = new QLabel(QStringLiteral("-"), card);
     (*valueLabel)->setObjectName(objectName);
-    (*valueLabel)->setMinimumWidth(80);
+    (*valueLabel)->setMinimumWidth(0);
+    (*valueLabel)->setMinimumHeight(42);
+    (*valueLabel)->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    (*valueLabel)->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     (*valueLabel)->setWordWrap(true);
     (*valueLabel)->setStyleSheet(QStringLiteral(
         "border:none; color:#17212b; font-size:13px; font-weight:900;"));
@@ -389,12 +398,6 @@ EvidencePage::EvidencePage(QWidget *parent)
     auto *filterTitle = new QLabel(QStringLiteral("Evidence filters"), filterPanel);
     filterTitle->setStyleSheet(QStringLiteral("font-size:16px;font-weight:800;color:#263238;"));
     filterLayout->addWidget(filterTitle);
-    auto *filterHint = new QLabel(
-        QStringLiteral("Timeline is ordered by capture time. Slots narrow the result; they are not the navigation."),
-        filterPanel);
-    filterHint->setWordWrap(true);
-    filterHint->setStyleSheet(QStringLiteral("color:#546e7a;font-size:12px;"));
-    filterLayout->addWidget(filterHint);
     auto *slotLabel = new QLabel(QStringLiteral("Slot"), filterPanel);
     slotLabel->setStyleSheet(QStringLiteral("font-weight:800;color:#455a64;"));
     filterLayout->addWidget(slotLabel);
@@ -451,23 +454,10 @@ EvidencePage::EvidencePage(QWidget *parent)
     auto *summaryLayout = new QVBoxLayout(summaryFrame);
     summaryLayout->setContentsMargins(14, 10, 14, 10);
     summaryLayout->setSpacing(8);
-    auto *summaryTextLayout = new QVBoxLayout;
-    m_summaryLabel = new QLabel(QStringLiteral("Evidence timeline"), summaryFrame);
-    m_summaryLabel->setObjectName(QStringLiteral("evidenceSummaryLabel"));
-    m_summaryLabel->setWordWrap(true);
-    m_summaryLabel->setStyleSheet(QStringLiteral(
-        "border:none;font-size:15px;font-weight:800;color:#263238;"));
-    m_statusLabel = new QLabel(
-        QStringLiteral("Showing loaded evidence in capture-time order."), summaryFrame);
-    m_statusLabel->setObjectName(QStringLiteral("evidenceStatusLabel"));
-    m_statusLabel->setWordWrap(true);
-    m_statusLabel->setStyleSheet(QStringLiteral("border:none;color:#546e7a;"));
-    summaryTextLayout->addWidget(m_summaryLabel);
-    summaryTextLayout->addWidget(m_statusLabel);
-    summaryLayout->addLayout(summaryTextLayout);
-
     auto *metricGrid = new QGridLayout;
     metricGrid->setSpacing(8);
+    metricGrid->setColumnStretch(0, 1);
+    metricGrid->setColumnStretch(1, 1);
     metricGrid->addWidget(createMetricCard(summaryFrame, QStringLiteral("Slot"),
                                            QStringLiteral("evidenceSlotMetric"),
                                            &m_slotMetricLabel), 0, 0);
@@ -684,7 +674,7 @@ EvidencePage::EvidencePage(QWidget *parent)
     m_autoRefreshTimer->setInterval(5000);
     m_autoRefreshTimer->setTimerType(Qt::CoarseTimer);
     connect(m_autoRefreshTimer, &QTimer::timeout, this,
-            [this]() { requestEvidenceRefresh(false); });
+            [this]() { requestEvidenceRefresh(); });
 }
 
 void EvidencePage::showEvent(QShowEvent *event)
@@ -985,15 +975,6 @@ void EvidencePage::showLocalEvidenceSnapshot(const ParkingViewState &state)
         return left.sessionId < right.sessionId;
     });
 
-    m_summaryLabel->setText(QStringLiteral("Qt local evidence timeline"));
-    m_summaryLabel->setStyleSheet(statePillStyle(SlotState::Acked));
-    m_statusLabel->setText(m_captures.isEmpty()
-        ? QStringLiteral("No loaded evidence matches the current filters.")
-        : QStringLiteral("%1 session pair%2 from %3 cached capture groups, ordered by latest captured time (newest first). Historical sessions are not fetched in v0.1.")
-              .arg(m_localTimelinePairs.size())
-              .arg(m_localTimelinePairs.size() == 1
-                       ? QString() : QStringLiteral("s"))
-              .arg(m_captures.size()));
     updateSummaryMetrics(selectedSlotId.isEmpty()
                              ? QStringLiteral("All slots") : selectedSlotId,
                          selectedSlotId.isEmpty()
@@ -1069,9 +1050,6 @@ void EvidencePage::showLoading(const QString &slotId)
     m_captures.clear();
     m_localTimelinePairs.clear();
     m_captureTable->setRowCount(0);
-    m_summaryLabel->setText(QStringLiteral("Loading parking evidence"));
-    m_summaryLabel->setStyleSheet(statePillStyle(SlotState::Vacant));
-    m_statusLabel->setText(QStringLiteral("Loading active session and evidence images..."));
     updateSummaryMetrics(slotId, SlotState::Vacant, QString(), -1, -1, QString());
     clearCaptureCard(m_firstImageLabel, m_firstTitleLabel, m_firstMetadataLabel,
                      m_firstOpenButton, QStringLiteral("First capture"),
@@ -1081,12 +1059,11 @@ void EvidencePage::showLoading(const QString &slotId)
                      QStringLiteral("Latest capture"), QStringLiteral("Loading..."));
 }
 
-void EvidencePage::showError(const QString &slotId, const QString &message)
+void EvidencePage::showError(const QString &slotId, const QString &)
 {
     if (!slotId.isEmpty() && slotId != m_currentSlotId) {
         return;
     }
-    m_statusLabel->setText(QStringLiteral("Could not load evidence: %1").arg(message));
     updateSummaryMetrics(slotId, SlotState::SensorError, m_plateNumber, -1,
                          m_captures.size(), QString());
     clearCaptureCard(m_firstImageLabel, m_firstTitleLabel, m_firstMetadataLabel,
@@ -1110,8 +1087,6 @@ void EvidencePage::openEvent(const QString &eventId, const QString &rawSlotId)
     m_currentEventId = eventId.trimmed();
     m_currentSlotId = slotId;
     m_currentSessionId = -1;
-    m_statusLabel->setText(
-        QStringLiteral("Resolving event evidence into the time-ordered timeline..."));
 }
 
 void EvidencePage::showEventEvidence(
@@ -1140,16 +1115,11 @@ void EvidencePage::showEventEvidence(
 
 void EvidencePage::showEventError(const QString &eventId,
                                   const QString &slotId,
-                                  const QString &message)
+                                  const QString &)
 {
     if (eventId != m_currentEventId) {
         return;
     }
-    m_summaryLabel->setText(
-        QStringLiteral("Event evidence unavailable"));
-    m_summaryLabel->setStyleSheet(statePillStyle(SlotState::SensorError));
-    m_statusLabel->setText(
-        QStringLiteral("Could not load event evidence: %1").arg(message));
     updateSummaryMetrics(slotId, SlotState::SensorError, m_plateNumber,
                          m_currentSessionId, m_captures.size(), eventId);
     clearCaptureCard(m_firstImageLabel, m_firstTitleLabel,
@@ -1197,22 +1167,16 @@ int EvidencePage::captureCount() const
 bool EvidencePage::downloadSelectedPairsTo(const QString &directoryPath)
 {
     if (m_downloadInProgress) {
-        m_statusLabel->setText(
-            QStringLiteral("An evidence download is already in progress."));
         return false;
     }
     if (!m_imageLoader || !m_captureTable
         || !m_captureTable->selectionModel()) {
-        m_statusLabel->setText(
-            QStringLiteral("Image download is not available."));
         return false;
     }
 
     const QModelIndexList selectedRows =
         m_captureTable->selectionModel()->selectedRows(0);
     if (selectedRows.isEmpty()) {
-        m_statusLabel->setText(
-            QStringLiteral("Select one or more timeline pairs to download."));
         return false;
     }
 
@@ -1231,8 +1195,6 @@ bool EvidencePage::downloadSelectedPairsTo(const QString &directoryPath)
         }
         const LocalTimelinePair &pair = m_localTimelinePairs.at(pairIndex);
         if (pair.sessionId <= 0) {
-            m_statusLabel->setText(QStringLiteral(
-                "Every selected row needs a session ID before it can be downloaded."));
             return false;
         }
         if (!pairKeys.contains(pair.key)) {
@@ -1241,8 +1203,6 @@ bool EvidencePage::downloadSelectedPairsTo(const QString &directoryPath)
         }
     }
     if (selectedPairs.isEmpty()) {
-        m_statusLabel->setText(
-            QStringLiteral("No downloadable session pair was selected."));
         return false;
     }
 
@@ -1254,8 +1214,6 @@ bool EvidencePage::downloadSelectedPairsTo(const QString &directoryPath)
             || selectedPair.latestEntryIndex < 0
             || selectedPair.latestEntryIndex
                 >= m_allLocalTimelineEntries.size()) {
-            m_statusLabel->setText(
-                QStringLiteral("A selected session pair is no longer available."));
             return false;
         }
         const LocalTimelineEntry &firstEntry =
@@ -1303,16 +1261,12 @@ bool EvidencePage::downloadSelectedPairsTo(const QString &directoryPath)
         };
         if (!appendDownload(firstEntry, QStringLiteral("FIRST"))
             || !appendDownload(latestEntry, QStringLiteral("LATEST"))) {
-            m_statusLabel->setText(QStringLiteral(
-                "Each selected session needs downloadable First and Latest image URLs."));
             return false;
         }
     }
 
     QDir parentDirectory(directoryPath);
     if (!parentDirectory.exists()) {
-        m_statusLabel->setText(
-            QStringLiteral("The selected download directory does not exist."));
         return false;
     }
     m_downloadDirectory = parentDirectory.absolutePath();
@@ -1333,11 +1287,6 @@ bool EvidencePage::downloadSelectedPairsTo(const QString &directoryPath)
 
     m_downloadInProgress = true;
     updateDownloadButtonState();
-    m_statusLabel->setText(
-        QStringLiteral("Downloading %1 First/Latest evidence image%2...")
-            .arg(downloads.size())
-            .arg(downloads.size() == 1
-                     ? QString() : QStringLiteral("s")));
     for (const EvidenceDownloadItem &download : downloads) {
         m_imageLoader->download(download.requestId, download.sourceUrl);
     }
@@ -1496,7 +1445,6 @@ void EvidencePage::finishEvidenceDownload()
               .arg(QDir::toNativeSeparators(m_downloadDirectory));
     m_downloadInProgress = false;
     updateDownloadButtonState();
-    m_statusLabel->setText(message);
     emit evidenceDownloadFinished(success, message, m_downloadedFiles);
     m_pendingDownloads.clear();
     m_downloadManifestRows.clear();
@@ -1504,16 +1452,12 @@ void EvidencePage::finishEvidenceDownload()
 
 void EvidencePage::requestCurrentEvidence()
 {
-    requestEvidenceRefresh(true);
+    requestEvidenceRefresh();
 }
 
-void EvidencePage::requestEvidenceRefresh(bool showInitialProgress)
+void EvidencePage::requestEvidenceRefresh()
 {
     if (!m_currentEventId.isEmpty()) {
-        if (showInitialProgress && m_captures.isEmpty()) {
-            m_statusLabel->setText(
-                QStringLiteral("Loading event evidence..."));
-        }
         emit eventEvidenceRequested(m_currentEventId);
         return;
     }
@@ -1537,13 +1481,6 @@ void EvidencePage::requestEvidenceRefresh(bool showInitialProgress)
     // The status endpoint is allowed to omit image resources. Populate this
     // timeline from the existing per-slot detail/current-session flow instead
     // of depending on Image Compare to have requested those images first.
-    if (showInitialProgress && m_captures.isEmpty()) {
-        m_statusLabel->setText(
-            QStringLiteral("Loading current-session evidence for %1 slot%2...")
-                .arg(requestedSlotIds.size())
-                .arg(requestedSlotIds.size() == 1
-                         ? QString() : QStringLiteral("s")));
-    }
     for (const QString &slotId : requestedSlotIds) {
         emit slotEvidenceRequested(slotId);
     }
@@ -1568,12 +1505,13 @@ void EvidencePage::renderCaptureTable()
             m_allLocalTimelineEntries.at(pair.latestEntryIndex).capture;
         const QStringList values = {
             pair.sessionId > 0
-                ? QStringLiteral("Session %1").arg(pair.sessionId)
+                ? QString::number(pair.sessionId)
                 : QStringLiteral("Unavailable"),
             pair.slotId.isEmpty() ? QStringLiteral("-") : pair.slotId,
             capturePairCellText(first),
             capturePairCellText(latest),
-            pairValueText(first.ocrResult, latest.ocrResult),
+            first.ocrResult.trimmed().isEmpty()
+                ? QStringLiteral("-") : first.ocrResult.trimmed(),
             pairValueText(captureReasonText(first.reason),
                           captureReasonText(latest.reason)),
             pairAvailabilityText(first, latest)};
@@ -1708,7 +1646,8 @@ void EvidencePage::updateSummaryMetrics(const QString &slotId,
         m_slotMetricLabel->setText(
             slotId.isEmpty()
                 ? QStringLiteral("-")
-                : QStringLiteral("%1 · %2").arg(slotId, slotStateText(state)));
+                : QStringLiteral("%1 · %2")
+                      .arg(slotId, evidenceSlotStateText(state)));
         m_slotMetricLabel->setStyleSheet(QStringLiteral(
             "border:none; color:%1; font-size:16px; font-weight:900;")
                                              .arg(slotStateAccent(state)));
@@ -1723,7 +1662,7 @@ void EvidencePage::updateSummaryMetrics(const QString &slotId,
     if (m_sessionMetricLabel) {
         QString sessionText;
         if (sessionId > 0) {
-            sessionText = QStringLiteral("Session %1").arg(sessionId);
+            sessionText = QString::number(sessionId);
         } else if (eventId == QStringLiteral("qt-local-cache")) {
             sessionText = QStringLiteral("Qt cache");
         } else if (!eventId.trimmed().isEmpty()) {
@@ -1767,9 +1706,6 @@ void EvidencePage::renderCaptureCard(
     }
     QString metadata = QStringLiteral("%1")
         .arg(captureTimeText(capture->timestamp));
-    if (variant && !variant->processing.isEmpty()) {
-        metadata += QStringLiteral("  |  %1").arg(variant->processing);
-    }
     if (ocrText != QStringLiteral("-")) {
         metadata += QStringLiteral("  |  OCR available");
     }

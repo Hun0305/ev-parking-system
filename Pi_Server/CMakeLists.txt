@@ -46,7 +46,8 @@ add_executable(gemini-ocr-test
     tests/integration/GeminiOcrTest.cpp
     src/ocr/GeminiOcrClient.cpp
     src/ocr/PlateImageEnhancer.cpp
-    src/ocr/PlateNormalizer.cpp)
+    src/ocr/PlateNormalizer.cpp
+    src/util/Logger.cpp)
 target_include_directories(gemini-ocr-test PRIVATE include)
 target_compile_options(gemini-ocr-test PRIVATE -Wall -Wextra)
 target_link_libraries(gemini-ocr-test PRIVATE
@@ -55,7 +56,8 @@ target_link_libraries(gemini-ocr-test PRIVATE
 # 외부 Gemini 호출 없이 HTTP 상태/JSON/MIME/fallback 계약을 검증한다.
 add_executable(gemini-ocr-client-test
     tests/unit/GeminiOcrClientTest.cpp
-    src/ocr/GeminiOcrClient.cpp)
+    src/ocr/GeminiOcrClient.cpp
+    src/util/Logger.cpp)
 target_include_directories(gemini-ocr-client-test PRIVATE include)
 target_compile_options(gemini-ocr-client-test PRIVATE -Wall -Wextra)
 target_link_libraries(gemini-ocr-client-test PRIVATE PkgConfig::CURL)
@@ -527,7 +529,7 @@ if(VEDA_BUILD_LEGACY_PARKING_TIMER_CLI)
 endif()
 
 # 실행/테스트가 빌드 디렉터리에서도 리소스를 찾을 수 있게 복사.
-foreach(resource db/schema.sql db/seed.sql config/timer.conf)
+foreach(resource db/schema.sql db/seed.sql db/seed_test.sql config/timer.conf)
     configure_file(${resource} ${resource} COPYONLY)
 endforeach()
 
@@ -670,7 +672,8 @@ add_test(NAME callback-lifecycle-test COMMAND callback-lifecycle-test)
 
 add_executable(telegram-message-formatter-test
     tests/unit/TelegramMessageFormatterTest.cpp
-    src/notification/TelegramMessageFormatter.cpp)
+    src/notification/TelegramMessageFormatter.cpp
+    src/util/TimeUtil.cpp)
 target_include_directories(telegram-message-formatter-test PRIVATE include)
 target_compile_options(telegram-message-formatter-test PRIVATE
     -Wall -Wextra -Wpedantic)

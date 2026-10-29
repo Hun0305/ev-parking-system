@@ -193,7 +193,6 @@ private:
     double m_alarmPulsePhase = 0.0;
 
     QLabel *m_selectedTitleLabel = nullptr;
-    QLabel *m_selectedMetaLabel = nullptr;
     QLabel *m_selectedStateLabel = nullptr;
     QLabel *m_runtimeDataStatusLabel = nullptr;
     QLabel *m_runtimeVehicleLabel = nullptr;
@@ -201,7 +200,6 @@ private:
     QLabel *m_runtimeOccupiedSinceLabel = nullptr;
     QLabel *m_runtimeOccupiedTimeLabel = nullptr;
     QLabel *m_runtimeAlarmLabel = nullptr;
-    QLabel *m_runtimeAlarmStateLabel = nullptr;
     QPushButton *m_editToggleButton = nullptr;
     QPushButton *m_undoButton = nullptr;
     QPushButton *m_editChannelNamesButton = nullptr;

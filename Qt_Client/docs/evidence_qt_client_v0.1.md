@@ -34,7 +34,13 @@ not the primary navigation.
 - Supports Ctrl/Shift multi-selection in the Capture timeline and downloads
   one deduplicated First/Latest pair per selected `slot_id + session_id`.
   The timeline itself also renders one row per session pair, with separate
-  First capture and Latest capture columns instead of one row per image.
+  First capture and Latest capture columns instead of one row per image. The
+  Session column shows the numeric ID without repeating its header, and the OCR
+  column shows only the First capture's OCR because Latest does not provide OCR.
+  The image comparison cards keep their OCR availability metadata but omit
+  processing/status values such as `NONE`, `ACTIVE`, or `ORIGINAL`.
+  The compact Slot metric renders `NON_EV_ALERT` as `NONEV`; server and shared
+  state values remain unchanged.
   Image filenames include a shared export ID plus capture time, OCR, and reason;
   the selected folder also receives a matching `evidence_metadata_*.csv` with
   slot, session, capture, OCR, separately labeled session plate, source, and

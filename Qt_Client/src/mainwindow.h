@@ -28,6 +28,7 @@ class SettingsPage;
 class WiseAiConfigClient;
 class QStackedWidget;
 class QToolButton;
+class UiFontScaleControl;
 
 class MainWindow : public QMainWindow
 {
@@ -71,6 +72,7 @@ private:
     QToolButton *m_monitorStatusButton = nullptr;
     QLabel *m_alertBanner = nullptr;
     QToolButton *m_notificationButton = nullptr;
+    UiFontScaleControl *m_uiFontScaleControl = nullptr;
     QLabel *m_notificationBadge = nullptr;
     QFrame *m_notificationPopup = nullptr;
     QHash<QString, QPointer<FireAlarmPopup>> m_fireAlarmPopups;

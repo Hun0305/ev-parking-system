@@ -11,6 +11,7 @@
 #include "services/mqttserviceclient.h"
 
 #include <QDateTime>
+#include <QDataStream>
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
@@ -264,6 +265,74 @@ bool parseOverstayThreshold(const QJsonDocument &document,
                       .toString().trimmed();
     errorMessage.clear();
     return true;
+}
+
+QByteArray apiSyncFingerprint(const ParkingViewState &state,
+                              int receivedCount,
+                              int appliedCount,
+                              int rejectedCount,
+                              int duplicateCount)
+{
+    QByteArray fingerprint;
+    QDataStream stream(&fingerprint, QIODevice::WriteOnly);
+    stream << receivedCount << appliedCount << rejectedCount << duplicateCount
+           << state.serverSlotCount;
+
+    QStringList slotIds = state.evSlots.keys();
+    slotIds.append(state.parkingSlots.keys());
+    std::sort(slotIds.begin(), slotIds.end());
+    for (const QString &slotId : slotIds) {
+        const bool evSlot = state.evSlots.contains(slotId);
+        SlotState slotState = SlotState::Vacant;
+        SlotVisualState visual;
+        QDateTime occupiedSince;
+        QString alarmText;
+        bool isEv = false;
+        if (evSlot) {
+            const EvSlotInfo &slot = state.evSlots.value(slotId);
+            slotState = slot.state;
+            visual = slot.visual;
+            occupiedSince = slot.occupiedSince;
+            alarmText = slot.alarmText;
+            isEv = slot.isEv;
+        } else {
+            const ParkingSlotInfo &slot = state.parkingSlots.value(slotId);
+            slotState = slot.state;
+            visual = slot.visual;
+            occupiedSince = slot.occupiedSince;
+        }
+
+        stream << slotId << evSlot << static_cast<int>(slotState)
+               << static_cast<int>(visual.occupancy)
+               << static_cast<int>(visual.vehicleClass)
+               << static_cast<int>(visual.alarm)
+               << visual.alarmAcknowledged
+               << static_cast<int>(visual.ocrStatus)
+               << visual.correlationId
+               << occupiedSince.toMSecsSinceEpoch()
+               << alarmText << isEv
+               << state.slotPlateNumbers.value(slotId)
+               << state.slotSessionIds.value(slotId, -1);
+
+        QStringList imageFingerprints;
+        for (const ParkingImageResource &image :
+             state.slotImages.value(slotId)) {
+            imageFingerprints.append(QStringLiteral(
+                "%1\x1f%2\x1f%3\x1f%4\x1f%5\x1f%6\x1f%7\x1f%8\x1f%9")
+                .arg(image.url.toString(QUrl::FullyEncoded),
+                     image.timestamp.toString(Qt::ISODateWithMs),
+                     image.role,
+                     image.processing)
+                .arg(image.imageId)
+                .arg(image.sessionId)
+                .arg(image.enhancementType,
+                     image.ocrResult,
+                     image.evidenceReason));
+        }
+        std::sort(imageFingerprints.begin(), imageFingerprints.end());
+        stream << imageFingerprints;
+    }
+    return fingerprint;
 }
 
 }
@@ -1366,6 +1435,7 @@ void ParkingController::emitEventEvidenceReady(
 
 void ParkingController::initializeApiClient()
 {
+    m_lastApiSyncFingerprint.clear();
     QSettings sharedSettings(m_sharedConfigPath, QSettings::IniFormat);
     QSettings localSettings(m_localConfigPath, QSettings::IniFormat);
     auto setting = [&](const QString &key, const QVariant &defaultValue) {
@@ -2151,8 +2221,13 @@ void ParkingController::applyParkingSnapshot(const QJsonDocument &document)
     m_apiDiagnostic.nextRetrySeconds = 0;
     m_apiDiagnostic.appliedSlotCount = uniqueCount;
     publishApiDiagnostic();
-    recordEvent(QStringLiteral("SYSTEM"), QStringLiteral("API_SYNC"), snapshotDetail,
-                QStringLiteral("DONE"));
+    const QByteArray fingerprint = apiSyncFingerprint(
+        m_state, receivedCount, appliedCount, rejectedCount, duplicateCount);
+    if (fingerprint != m_lastApiSyncFingerprint) {
+        m_lastApiSyncFingerprint = fingerprint;
+        recordEvent(QStringLiteral("SYSTEM"), QStringLiteral("API_SYNC"),
+                    snapshotDetail, QStringLiteral("DONE"));
+    }
 }
 
 void ParkingController::publishApiDiagnostic()
