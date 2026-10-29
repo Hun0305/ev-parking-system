@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="release" src="https://img.shields.io/badge/release-v2.0-2ea44f" />
+  <img alt="release" src="https://img.shields.io/badge/release-v3.0-2ea44f" />
   <img alt="stack" src="https://img.shields.io/badge/stack-C%2B%2B%20%7C%20Qt%20%7C%20STM32%20%7C%20OpenCV-orange" />
 </p>
 
@@ -144,6 +144,49 @@ v1.0 프로토타입 이후, 카메라 기반 차량 인식(IVA)을 핵심 입�
 - **LoRa 무선 전송** — E22 드라이버 기반 홀/불꽃 센서 이벤트 송신(EVDA-46)
 - **LoRa v1.1** — 센서 페이로드 v1.1 및 양방향 통신, STM1/STM2 2노드 구성(EVDA-46)
 - **진단/문서** — LoRa 부팅 진단 로그 상시화, 팀원용 Pi 구축 가이드 추가(EVDA-46)
+
+## v3.0 업데이트 내역
+
+> 각 저장소의 `develop` 브랜치 최신 커밋(8/26 전후, Stage 3 "최종 통합 기능 구현")을
+> 기준으로 정리한 내용입니다. 이 시점부터 `cv_snapshot_api`도 모노레포에 포함됩니다
+> (8/21 최초 커밋 이후 생성됨 — 버전 기록은 아래 "cv_snapshot_api 릴리즈 노트" 참고).
+
+v2.0 이후 인증·보안, 성능 최적화, 그리고 Qt 클라이언트 UI 전면 개편이 이루어진
+최종 통합 단계입니다.
+
+### Pi_Server
+
+- **성능** — DB 연결 PRAGMA 미적용 버그 수정 및 폴링 쿼리 최적화로 유휴 CPU
+  39.6% → 3.4%로 감소(EVDA-241, 11.6배)
+- **카메라 인식 확장** — CH2 입구 차량 인식 + CH1·CH3 ONVIF IVA 기능 통합,
+  `/dev/parking_alert` 커널 6.1 호환성 보완(EVDA-238/239)
+- **보안** — TLS 설정 및 인증서 생성 도구 추가(EVDA-225)
+- **진단/검증** — LoRa UART 진단 콘솔 C++ 전환, STM32 센서 링크 HIL(hardware-in-the-loop)
+  승인 테스트(EVDA-223)
+- **알림** — 텔레그램 알림 메시지 포맷 개선, MQTT 기반 무중단 화재 경보 해제 도구(EVDA-216)
+
+### Qt_Client (UI 변화 큼 — 아래 스크린샷 참고)
+
+- **로그인 화면 추가** — 앱 로그인 및 서버 Bearer 인증 경계 도입, 로그인 전에는
+  RTSP·API·MQTT 연결을 시작하지 않음
+- **Evidence 시간순 페어 타임라인** — 기존 개별 조회 방식을 캡처 페어 타임라인으로
+  재구성, 자동 새로고침과 선택 다운로드 지원(EVDA-229)
+- **탭 통폐합** — Image Compare 및 Parking ROI 탭 제거, Evidence/IVA Setup 화면으로
+  기능 흡수(EVDA-230/233)
+- **Dashboard 개편** — 공통 네비게이션·알림 UI, 모니터링 레이아웃 개선, 페이지
+  타이틀/헤더 레이아웃 통일(EVDA-213)
+- **Parking Map 개편** — 운영 UI 개선, 12카메라 전체 보기, 차량 검색 추가(EVDA-213)
+- **Events / Debug 탭** UI 후속 정리(EVDA-228/234)
+- **IVA Setup** — 편집 기능 보강, 미저장 변경 보호, 레이아웃 복구(EVDA-232)
+
+### STM
+
+- **화재 감지 안정화** — 판정 기준을 적응형에서 DC 절대 임계로 단순화, FFT twiddle
+  테이블 제거로 플래시 용량 59% 절감(EVDA-218/46)
+- **LoRa 신뢰성** — 하트비트 30초 → 10초 단축 + 노드별 스태거(충돌 회피), 화재
+  DETECTED 이벤트 2회 추가 재전송(EVDA-46/124)
+- **구조 통합** — 중복돼 있던 `STM1/`+`STM2/` 프로젝트(428개 파일 복제)를 `STM/`
+  하나로 합치고, `board_config.h` 한 줄로 보드를 선택하도록 변경
 
 ## cv_snapshot_api 릴리즈 노트
 
