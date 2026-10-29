@@ -188,6 +188,19 @@ v2.0 이후 인증·보안, 성능 최적화, 그리고 Qt 클라이언트 UI �
 - **구조 통합** — 중복돼 있던 `STM1/`+`STM2/` 프로젝트(428개 파일 복제)를 `STM/`
   하나로 합치고, `board_config.h` 한 줄로 보드를 선택하도록 변경
 
+### 스크린샷
+
+> 최종 데모 영상(팀 보관 Google Drive)에서 캡처한 v3.0 시점 화면입니다. v1.0 스크린샷과
+> 비교하면 로그인 화면, Evidence 타임라인, IVA Setup 등 Qt 클라이언트 UI가 크게
+> 달라진 것을 볼 수 있습니다.
+
+| | |
+|---|---|
+| ![로그인 화면](./docs/assets/v3-screenshots/01-login.jpg) 로그인 화면 (신규) | ![Dashboard](./docs/assets/v3-screenshots/02-dashboard.jpg) Dashboard — 4채널 RTSP 모니터링 |
+| ![Parking Map](./docs/assets/v3-screenshots/03-parking-map.jpg) Parking Map — 슬롯 상세/차량 정보 | ![Evidence](./docs/assets/v3-screenshots/04-evidence.jpg) Evidence — 캡처 페어 타임라인 |
+| ![IVA Setup](./docs/assets/v3-screenshots/05-iva-setup.jpg) IVA Setup — WiseAI 영역 설정 | ![System Settings](./docs/assets/v3-screenshots/06-system-settings.jpg) System — 서버 연결/주차 정책 설정 |
+| ![EV 구역 위반 감지](./docs/assets/v3-screenshots/07-ev-violation-demo.jpg) EV 구역 내 일반차량 주차 감지(실물 데모) | |
+
 ## cv_snapshot_api 릴리즈 노트
 
 > 원본 저장소(`cv_snapshot_api`)에는 별도 GitHub Release가 없고, 대신 저장소 내
