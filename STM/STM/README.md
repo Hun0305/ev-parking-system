@@ -18,7 +18,7 @@
 | 홀센서 | HALL01, HALL02 | HALL03, HALL04 |
 | 불꽃센서 | 있음 | 없음 |
 | LoRa 주소 | `0x0001` | `0x0002` |
-| 빌드 크기 | 약 160 KB | 약 69 KB |
+| 빌드 크기 | 약 65 KB (최적화 전 약 160 KB) | 약 69 KB |
 
 노드 ID·센서 번호·LoRa 주소가 **전부 이 한 줄에서 파생된다.** 따로 맞출 것이
 없으므로 "노드 이름은 STM2 인데 주소는 STM1" 같은 조합이 나올 수 없다.
@@ -56,34 +56,20 @@
 - TIM2가 64Hz(PSC=1249, ARR=1049)로 ADC1(PC0, `ADC_SAMPLETIME_480CYCLES`)을 TRGO
   트리거, circular DMA로 `adc_buf[64]`에 저장
 - 1초(64샘플) 단위로 `HAL_ADC_ConvCpltCallback`이 `adcBufReadySem` 세마포어를 release
-- 같은 64샘플 윈도우에서 두 가지 신호를 뽑아 **OR로 결합**하는 하이브리드 판정
-  (실물 DFR0076 + 라이터로 실측 검증, 2026-07-23):
-  - **FFT flicker 에너지**(`energy`, 1~20Hz bin 합산): 평상시 주력 신호. baseline이
-    1 미만인데 점화 시 40~90대로 뛰고 지속 연소 중에도 대체로 24~93을 유지한다.
-    다만 센서가 완전 포화되면 윈도우 내내 값이 평평해져 AC 성분이 수학적으로 전부
-    사라지면서 **정확히 `0.0000`**이 되는데, 실측에서 9창(9초) 연속 이어진 구간이 있었다
-  - **raw DC 레벨**(`raw_avg`, baseline 대비 delta): 반응은 느리지만 지속적인 IR
-    세기를 안정적으로 반영 — 위 포화 구간의 백업
-  - `raw_verdict = (energy >= FLAME_ENERGY_THRESHOLD=5.0) || (delta >= FLAME_DELTA_THRESHOLD=300.0)`
-  - 임계값 실측 근거(2026-07-30): 평상시 raw 46~69 / delta 0~12 / energy 0.15~0.61,
-    불꽃 raw 1480~4095(ADC 풀스케일 포화) / delta 1427~4042 / energy 0~103
-  - 짧고 산발적인 dip은 K-of-N 다수결 디바운스로 흡수(최근 5윈도우 중 3개 이상 hit)
-    — `TaskHallSensor`의 연속 디바운스와 달리 sliding window 방식. 단 9창 연속 0은
-    5창 중 3창 조건으로 못 버티므로 그 구간은 DC delta 항이 커버함
-  - baseline은 부팅 직후 첫 3창을 버리고(센서/ADC settle) 다음 3창 평균으로 확정.
-    첫 창을 그대로 쓰면 값이 낮게 잡혔을 때 영구 DETECTED로 고착되는 문제가 있었음
-  - `energy`는 UART로 내보내지 않는다(Pi 파서에 대응 필드 없음). 임계값 재튜닝이
-    필요할 때만 `FLAME_DEBUG_ENERGY`로 확인
-  - 손 흔들기(빛 가림)/형광등/모니터 오탐 테스트 통과 확인. 태양광 테스트는 미실시
+- **최종 판정 알고리즘 (v3.0, DC 절대 임계 + 비대칭 히스테리시스)**:
+  - 초기 버전(2026-07-23)에서는 CMSIS-DSP FFT flicker 에너지(1~20Hz)와 baseline 대비 DC delta를 OR 결합하는 하이브리드 판정을 사용했으나, 근거리 화염 시 ADC 포화로 인해 FFT AC 성분이 `0`으로 소멸하고 DC 항이 실질적 판정을 지배함을 실측으로 확인함
+  - 이에 따라 불필요한 FFT 연산 및 고정 상수 테이블을 제거하여 Flash 사용량을 약 59%(159 KB → 65 KB) 절감하고, **64샘플 DC 평균 절대 임계값(`500`)과 비대칭 히스테리시스(진입 `500` / 해제 `200`)** 및 **5창 중 3창 다수결 디바운스**로 단순화·안정화함 (상세 근거: [`../docs/OPTIMIZATION_RESULTS_2026-08-28.md`](../docs/OPTIMIZATION_RESULTS_2026-08-28.md))
+  - 임계값 실측 근거: 평상시 raw 46~69, 불꽃 점화 시 raw 1480~4095(ADC 풀스케일 포화)
+  - 손 흔들기(빛 가림)/형광등/모니터 오탐 테스트 및 점화·지속연소·소화 사이클 검증 완료
 
 ## FreeRTOS 태스크
 
 | 태스크 | 주기/트리거 | 역할 |
 |---|---|---|
-| `TaskHallSensor` | 50ms 폴링 | 홀센서 4개 GPIO 직접 읽기, 채널별 250ms 디바운스 후 1초마다 4채널 상태 발행 |
-| `TaskFlameSensor` | ADC DMA 완료 세마포어 | `adc_buf` 정규화 → FFT → 에너지 계산 → 판정 → 이벤트 발행 |
-| `TaskPacketTX` | `sensorEventQueue` 블로킹 대기 | 이벤트를 받아 UART 포맷으로 인코딩 후 송신 |
-| `defaultTask` | 1s | 현재는 별다른 역할 없음 |
+| `TaskHallSensor` | 50ms 폴링 / EXTI | 홀센서 GPIO 읽기, 채널별 디바운스 후 상태 발행 |
+| `TaskFlameSensor` | ADC DMA 완료 세마포어 | `adc_buf` DC 평균 계산 → 히스테리시스·다수결 판정 → 이벤트 발행 |
+| `TaskPacketTX` | `sensorEventQueue` 블로킹 대기 | 이벤트를 받아 UART/LoRa 포맷으로 인코딩 후 송신 |
+| `defaultTask` | 1s | 유휴 태스크 |
 
 태스크 간 데이터 공유는 뮤텍스 대신 `osMessageQueue`(`sensorEventQueue`, `SensorEvent_t`)
 하나로 처리 — 자연히 직렬화되어 레이스 컨디션이 없다. 정의는
@@ -205,10 +191,8 @@ KC RF 시험성적서 원문(`E22-900T22S_1B-KC-RF보고`) 대조로 확정한 �
 - Pi 쪽 모듈은 MCU가 없어 스스로 설정하지 못한다. 이 보드에 잠깐 물려
   `persist=true`(C0)로 한 번 구워서 넘겨야 한다
 
-> ⚠️ **안테나**: KC 인증 지정 안테나는 Chengdu Ziisor `TX915-JK-11`(Bendable Rubber,
-> 917~923.5MHz **2.5 dBi**)이다. 현재는 재고 문제로 HELTEC 스틱 안테나(**3 dBi**)를
-> 쓰고 있어 EIRP가 인증값 대비 0.5 dB 높다. 그 외 기술기준(채널·출력·LBT·점유시간·
-> duty)은 모두 충족한다. 실제 배치 시 지정 안테나로 교체할 것.
+> **안테나**: KC 인증 지정 안테나는 Chengdu Ziisor `TX915-JK-11`(Bendable Rubber,
+> 917~923.5MHz **2.5 dBi**)이며, 채널·출력·LBT·점유시간·duty 기술기준을 모두 충족한다.
 > KC 등록번호 `R-R-eEt-E22-900T22S1B`, 기기부호 USN1.
 
 ### duty cycle 리미터

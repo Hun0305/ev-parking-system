@@ -6,7 +6,7 @@ Qt Widgets와 QML 기반 스마트 주차 관제 클라이언트입니다.
 
 - 한화비전 카메라 RTSP 4채널 표시
 - 채널 확대·복귀 시 기존 스트림 유지
-- EV-01~EV-03, P-01~P-04 주차면 상태 표시
+- EV-01~EV-04, P-01~P-04 주차면 상태 표시
 - Raspberry Pi HTTP API에서 주차 상태 동기화
 - 차량번호, 차량 유형, 점유 시간과 경고 표시
 - 주차면 클릭 시 차량·번호판 원본/개선 이미지 조회
@@ -65,7 +65,7 @@ allow_insecure_http=true
 Copy-Item ..\config\client_config.local.example.ini ..\config\client_config.local.ini
 ~~~
 
-client_config.local.ini은 Git에서 제외되며, 공용 파일보다 우선합니다.
+`client_config.local.ini`은 Git에서 제외되며, 기본 설정 파일보다 우선합니다.
 
 Settings 화면에서 프로토콜, `Server IP / Host`, `API Port`를 각각 입력해 저장하면
 내부적으로 전체 base URL을 조합하여 로컬 오버라이드 파일에 기록하고 즉시 재연결합니다.
@@ -96,7 +96,7 @@ Parking ROI 저장은 IVA Setup의 `Save Crop ROI to Pi` 흐름에서 처리합�
 
 일시적 네트워크 오류는 현재 session을 끊지 않습니다. 반면 absolute 만료 시각 도달 또는 보호 API의 `401`은 관제 연결을 종료하고 로그인 창으로 한 번만 복귀합니다. 로그인 중 선택한 서버와 다른 origin으로 Settings 주소를 바꾸려면 앱에서 다시 로그인해야 합니다.
 
-운영 연결은 HTTPS만 허용합니다. 평문 HTTP는 로컬 mock 시험을 위해 `localhost`/loopback 주소에만 허용되며, 이때도 로컬 설정에 `api/allow_insecure_http=true`를 명시해야 합니다. 서버 구현 계약은 [서버 앱 인증 MVP 요청서](docs/2026-08-20_server_app_auth_mvp_request.md)에 정리되어 있습니다.
+운영 연결은 HTTPS만 허용합니다. 평문 HTTP는 로컬 mock 시험을 위해 `localhost`/loopback 주소에만 허용되며, 이때도 로컬 설정에 `api/allow_insecure_http=true`를 명시해야 합니다. 서버 구현 계약은 [서버 앱 인증 설계 명세](docs/2026-08-20_server_app_auth_mvp_request.md)에 정리되어 있습니다.
 
 ## 빌드 (Windows / MinGW)
 

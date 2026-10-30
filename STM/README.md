@@ -61,7 +61,7 @@ STM/                            STM32CubeIDE 프로젝트
   Core/Inc/board_config.h       ★ STM1 / STM2 선택
   Core/Inc/sensor_protocol.h    페이로드 v1.1 규격, 주기 상수
   Core/Inc/lora_frame.h         LoRa 바이너리 프레임 규격
-  Core/Src/freertos.c           태스크 (홀 / 화재 FFT / LoRa 송수신)
+  Core/Src/freertos.c           태스크 (홀 / 화재 감지 / LoRa 송수신)
   Core/Src/sensor_protocol.c    문자열 인코딩, seq 관리
   README.md                     클럭·핀맵·신호처리·LoRa 상세
 docs/                           프로토콜 / 전파법 / Pi 연동 문서
@@ -72,7 +72,7 @@ misc/
 
 ## 빌드
 
-STM32CubeIDE 2.2.0 으로 `STM/` 를 엽니다. GCC 툴체인, CMSIS-DSP 링크.
+STM32CubeIDE 2.2.0 으로 `STM/` 를 엽니다. GCC 툴체인을 사용합니다.
 
 대상 보드는 `STM/Core/Inc/board_config.h` 에서 고릅니다.
 
@@ -101,7 +101,7 @@ STM32CubeIDE 2.2.0 으로 `STM/` 를 엽니다. GCC 툴체인, CMSIS-DSP 링크.
 
 ```c
 #define SENSOR_TX_UART 1   /* USART2 콘솔 / 직결 */
-#define SENSOR_TX_LORA 1   /* E220 LoRa 프레임 (Pi 링크) */
+#define SENSOR_TX_LORA 1   /* E22 LoRa 프레임 (Pi 링크) */
 ```
 
 불꽃 임계값을 재튜닝할 때는 `FLAME_DEBUG_ENERGY` 를 켜면 창마다
