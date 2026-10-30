@@ -33,9 +33,6 @@ STM32 (홀/불꽃 센서) → LoRa → Raspberry Pi 서버 (MQTT·Snapshot API·
                               Qt 관제 클라이언트 (RTSP 영상·주차 상태·화재 알림)
 ```
 
-4개 하위 시스템(`Pi_Server`, `Qt_Client`, `STM`, `cv_snapshot_api`)을 하나의 저장소로
-통합했습니다. 각 폴더는 원래 개별 저장소였으며, 현재는 이 저장소의 하위 디렉터리로 관리됩니다.
-
 ## 구성
 
 - [`Pi_Server`](./Pi_Server) — Raspberry Pi 기반 C++ 서버 (MQTT, RTSP, Snapshot API, OpenCV, SQLite)
@@ -49,10 +46,6 @@ STM32 (홀/불꽃 센서) → LoRa → Raspberry Pi 서버 (MQTT·Snapshot API·
 > [Releases](../../releases)에서 확인할 수 있습니다.
 
 ## v3.0 업데이트 내역
-
-> 각 저장소의 `develop` 브랜치 최신 커밋(8/26 전후, Stage 3 "최종 통합 기능 구현")을
-> 기준으로 정리한 내용입니다. 이 시점부터 `cv_snapshot_api`도 모노레포에 포함됩니다
-> (8/21 최초 커밋 이후 생성됨 — 버전 기록은 아래 "cv_snapshot_api 릴리즈 노트" 참고).
 
 v2.0 이후 인증·보안, 성능 최적화, 그리고 Qt 클라이언트 UI 전면 개편이 이루어진
 최종 통합 단계입니다.
@@ -102,10 +95,6 @@ v2.0 이후 인증·보안, 성능 최적화, 그리고 Qt 클라이언트 UI �
 
 ### 스크린샷
 
-> 최종 데모 영상(팀 보관 Google Drive)에서 캡처한 v3.0 시점 화면입니다. v1.0 스크린샷과
-> 비교하면 로그인 화면, Evidence 타임라인, IVA Setup 등 Qt 클라이언트 UI가 크게
-> 달라진 것을 볼 수 있습니다.
-
 | | |
 |---|---|
 | ![로그인 화면](./docs/assets/v3-screenshots/01-login.jpg) 로그인 화면 (신규) | ![Dashboard](./docs/assets/v3-screenshots/02-dashboard.jpg) Dashboard — 4채널 RTSP 모니터링 |
@@ -115,15 +104,8 @@ v2.0 이후 인증·보안, 성능 최적화, 그리고 Qt 클라이언트 UI �
 
 ## cv_snapshot_api 릴리즈 노트
 
-> 원본 저장소(`cv_snapshot_api`)에는 별도 GitHub Release가 없고, 대신 저장소 내
-> [`RELEASE_NOTES.md`](./cv_snapshot_api/RELEASE_NOTES.md)에 버전별 구현/검증 상태가 기록되어
-> 있습니다. 그 내용을 그대로 옮겼습니다.
-
-이 문서는 실제 구현과 검증 상태를 구분해 기록한다. 출시 버전에는 확인되지 않은 기능이나 외부 구성요소 연동을 포함하지 않는다.
 
 ### [refector] - 2026-08-24
-
-`cv_snapshot_api_release`의 별도 소스 복사본이다. ROI와 입력 해상도는 바꾸지 않았다.
 
 - OpenCV 내부 병렬 처리를 기본 1개 스레드로 제한한다.
 - 무거운 Canny·환경 분석·이미지 세트 처리를 하나의 admission slot으로 직렬화하고, 기본
@@ -134,13 +116,8 @@ v2.0 이후 인증·보안, 성능 최적화, 그리고 Qt 클라이언트 UI �
 - 새 값은 `SampleComponent_default_attribute_0.json`의 `opencv_thread_limit`,
   `processing_min_interval_ms`, `processed_jpeg_cache_ttl_ms`로 조정한다.
 
-CV5 Docker build, 새 CAP 생성, 카메라 runtime CPU·온도·watchdog 검증은 아직 수행하지 않았다.
 
 ### [0.1.0] - 2026-08-05
-
-#### 기준선
-
-CV5 OpenSDK용 현재 `cv_snapshot_api` 소스와 테스트 UI의 기능 기준선이다. 이 버전은 카메라 프레임을 캡처하고, 동일 프레임의 원본·자동 개선·지정 필터 JPEG를 제공한다.
 
 #### 주요 기능
 
@@ -200,7 +177,3 @@ CV5 OpenSDK용 현재 `cv_snapshot_api` 소스와 테스트 UI의 기능 기준�
 - 위 운영 API의 기존 method와 path를 유지한다.
 - `run_id`는 카메라가 생성하며, 서버가 미리 생성하거나 추측하지 않는다.
 - 레퍼런스 프로젝트 `snapshot_jpeg`, `display_image_opencv`는 변경하지 않았다.
-
-### 다음 버전
-
-`0.2.0`은 저조도 OCR 재촬영 지원을 위한 카메라 메타데이터 확장과 서버·STM 연동 검증을 대상으로 한다. 아직 구현 또는 릴리즈 항목으로 확정하지 않는다. 세부 계획은 [`cv_snapshot_api/docs/implementation-plan.adoc`](./cv_snapshot_api/docs/implementation-plan.adoc)에 기록한다.
