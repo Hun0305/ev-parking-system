@@ -6,7 +6,7 @@ Qt Client는 config/client_config.ini에 정의된 Raspberry Pi HTTP API에서 �
 ## 설정 우선순위
 
 1. config/client_config.local.ini — 개인 PC 오버라이드, Git 제외
-2. config/client_config.ini — 팀 공유 기본값, Git 추적
+2. config/client_config.ini — 기본 설정값, Git 추적
 
 공유 파일의 키:
 

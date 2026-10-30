@@ -2,12 +2,12 @@
 
 > 작업일: 2026-07-22
 > 저장소: `Qt_Client`
-> 브랜치: `taejun/rtsp-performance-reconnect`
+> 브랜치: `feat/rtsp-performance-reconnect`
 > 목적: Mock 데이터와 Debug 동작을 운영 Controller에서 분리하고, 자동 테스트 코드는 `tests/` 안에만 유지
 
 ## 1. 요청과 문제 정의
 
-팀 리뷰에서 다음 요청이 들어왔다.
+구조 점검 과정에서 다음 개선 과제를 설정했다.
 
 > mockdata, 동작을 파일이나 함수로 구분해서 작성 가능할까요?
 

@@ -1,6 +1,6 @@
 # RTSP Legacy Reference
 
-원본 `Gyuseok_version`에서 선별 복사한 RTSP/FFmpeg/QML 참고 코드입니다.
+초기 프로토타입에서 선별 복사한 RTSP/FFmpeg/QML 참고 코드입니다.
 
 - `RtspVideoItem.h`, `RtspVideoItem.cpp`: FFmpeg로 RTSP 영상을 디코딩해 `QQuickPaintedItem`에 그리는 코드
 - `qml_source/`: 고화질/저화질 RTSP 모니터링 QML UI

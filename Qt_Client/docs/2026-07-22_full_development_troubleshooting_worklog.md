@@ -2,8 +2,8 @@
 
 > 작업일: 2026-07-22
 > 저장소: `Qt_Client`
-> 작업 브랜치: `taejun/rtsp-performance-reconnect`
-> PR: `VEDA-4th-Team5/Qt_Client` PR #1
+> 작업 브랜치: `feat/rtsp-performance-reconnect`
+> PR: `Qt_Client` PR #1
 > 최종 반영 커밋: `942463a refactor: separate parking mock data and simulation`
 > 문서 범위: 코드 분석, Mock/Controller 모듈화, 테스트, 실행 확인, 문서화, GitHub 설정과 PR 갱신, 발생 문제와 해결 과정
 
@@ -13,7 +13,7 @@
 
 오늘 작업의 핵심은 `ParkingController`에 섞여 있던 Mock 데이터와 Debug 시뮬레이션 동작을 실제 운영 기능에서 분리하는 것이었다.
 
-팀 리뷰에서 다음 취지의 요청이 전달됐다.
+코드 점검 과정에서 다음 개선 사항을 도출했다.
 
 ```text
 현재 controller.cpp에 임의 테스트 값들이 들어가 있는데,
@@ -83,12 +83,12 @@ Git 명령은 반드시 `Qt_Client`에서 실행했다.
 ### 2.2 브랜치와 PR
 
 ```text
-branch: taejun/rtsp-performance-reconnect
+branch: feat/rtsp-performance-reconnect
 remote: origin
-repository: VEDA-4th-Team5/Qt_Client
+repository: Qt_Client
 PR: #1
 base: develop
-head: taejun/rtsp-performance-reconnect
+head: feat/rtsp-performance-reconnect
 ```
 
 기존 PR이 열려 있었으므로 새 PR을 만들지 않고 동일한 head branch에 커밋을 push하는 방식을 사용했다.
@@ -201,7 +201,7 @@ ParkingController::start()
 
 ### 3.6 설명서 작성
 
-오늘 코드 구조를 처음 보는 팀원이 이해할 수 있도록 다음 문서를 작성했다.
+코드 구조를 한눈에 이해할 수 있도록 다음 문서를 작성했다.
 
 ```text
 docs/2026-07-22_qt_client_module_implementation_guide.md
@@ -264,8 +264,8 @@ push:
 
 ```text
 bed00ae..942463a
-taejun/rtsp-performance-reconnect
-  → origin/taejun/rtsp-performance-reconnect
+feat/rtsp-performance-reconnect
+  → origin/feat/rtsp-performance-reconnect
 ```
 
 기존 PR #1의 head SHA가 `942463a02182c9263fd49f046eb0d31291be0c42`로 갱신된 것을 확인했다.
@@ -655,7 +655,7 @@ set_target_properties(parkingsimulationservice_test PROPERTIES
 
 ### 증상
 
-상세 설계서에 특정 renderer가 필요한 구조도 4개를 사용했으나 팀의 일반 Markdown 문서에서는 사용하지 않는 방식이라는 피드백이 있었다.
+상세 설계서에 특정 renderer가 필요한 구조도 4개를 사용했으나 일반 Markdown 문서에서는 사용하지 않는 방식이므로 수정했다.
 
 ### 해결
 
@@ -675,7 +675,7 @@ set_target_properties(parkingsimulationservice_test PROPERTIES
 
 ### 교훈
 
-팀 Markdown 문서는 특정 renderer에 의존하지 않는 일반 text 구조도를 사용한다.
+Markdown 문서는 특정 renderer에 의존하지 않는 일반 text 구조도를 사용한다.
 
 ---
 
@@ -786,7 +786,7 @@ $env:Path += ';C:\Program Files\GitHub CLI'
 확인 결과:
 
 ```text
-Logged in to github.com account taejundev777
+Logged in to github.com
 Git protocol: HTTPS
 Credential source: keyring
 ```
@@ -796,7 +796,7 @@ Credential source: keyring
 ### 검증
 
 ```text
-origin/taejun/rtsp-performance-reconnect
+origin/feat/rtsp-performance-reconnect
   → 942463a 반영
 
 PR #1 head_sha
@@ -889,7 +889,7 @@ deletions: 146
 
 ```text
 URL:
-https://github.com/VEDA-4th-Team5/Qt_Client/pull/1
+PR #1
 
 상태:
 open
@@ -898,7 +898,7 @@ base:
 develop
 
 head:
-taejun/rtsp-performance-reconnect
+feat/rtsp-performance-reconnect
 ```
 
 ### 9.3 리뷰 답변 요약
@@ -1018,13 +1018,13 @@ Raspberry Pi Server       │
 
 ```text
 branch:
-taejun/rtsp-performance-reconnect
+feat/rtsp-performance-reconnect
 
 HEAD:
 942463a
 
 remote tracking:
-origin/taejun/rtsp-performance-reconnect
+origin/feat/rtsp-performance-reconnect
 
 PR:
 #1 open
@@ -1050,7 +1050,7 @@ CTest:
 1. PR #1 리뷰 댓글에 변경 내용 답변
 2. Re-request review
 3. 이 통합 일지를 별도 docs 커밋으로 반영
-4. 현재 실행 순서와 Demo 상태를 팀원에게 공유
+4. 현재 실행 순서와 Demo 상태를 문서로 정리
 
 ### 13.2 Qt 다음 작업
 

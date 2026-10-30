@@ -30,7 +30,7 @@ cd C:\Users\5-13\Downloads\opencv\server_handoff\low_quality_presence_v1
   --source-mode rgb
 ```
 
-서버팀이 자체 승인한 train template을 보유하면 bootstrap cache 대신 그 자료로 다시 생성한다. 현재 bootstrap negative source는 inferred negative이므로 독립 성능 증명이나 운영 승인을 의미하지 않는다.
+서버에서 자체 승인한 train template을 보유하면 bootstrap cache 대신 그 자료로 다시 생성한다. 현재 bootstrap negative source는 inferred negative이므로 독립 성능 증명이나 운영 승인을 의미하지 않는다.
 
 ## Pi_Server 연결
 

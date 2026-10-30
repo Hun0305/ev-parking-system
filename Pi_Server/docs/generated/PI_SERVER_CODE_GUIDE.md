@@ -469,7 +469,7 @@ RTSP worker는 Snapshot API 비사용 또는 fallback 활성 시에만 시작한
 
 Linux 커널 드라이버 또는 사용자 공간 ABI를 구현한다.
 
-- `MODULE_AUTHOR("VEDA Team 5")` — Doxygen 설명이 없어 선언과 호출부를 함께 확인해야 한다.
+- `MODULE_AUTHOR("Smart Parking System")` — Doxygen 설명이 없어 선언과 호출부를 함께 확인해야 한다.
 - `MODULE_DESCRIPTION("Smart parking alert character device")` — Doxygen 설명이 없어 선언과 호출부를 함께 확인해야 한다.
 - `MODULE_LICENSE("GPL")` — Doxygen 설명이 없어 선언과 호출부를 함께 확인해야 한다.
 - `MODULE_VERSION("1.0.0")` — Doxygen 설명이 없어 선언과 호출부를 함께 확인해야 한다.

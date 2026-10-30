@@ -2,15 +2,15 @@
 
 > 작성일: 2026-07-22
 > 대상 저장소: `Qt_Client`
-> 대상 브랜치: `taejun/rtsp-performance-reconnect`
+> 대상 브랜치: `feat/rtsp-performance-reconnect`
 > 변경 범위: 주차 상태 Mock 데이터, Debug 시뮬레이션, `ParkingController`, 앱 조립, 자동 테스트
-> 문서 목적: 이번 리팩터링의 이유와 결과를 처음 보는 팀원도 코드 수정이 가능하도록 파일·클래스·함수 단위로 설명
+> 문서 목적: 이번 리팩터링의 이유와 결과를 유지보수 시 코드 수정이 용이하도록 파일·클래스·함수 단위로 설명
 
 ---
 
 ## 1. 작업 요청
 
-팀에서 다음 요청이 전달됐다.
+다음과 같은 리팩터링 목표를 설정했다.
 
 > mockdata, 동작을 파일이나 함수로 구분해서 작성 가능할까요?
 
@@ -1117,6 +1117,6 @@ tests
     → 자동 검증
 ```
 
-이제 팀원이 Mock 값을 수정할 때 운영 API 코드를 건드릴 필요가 없고, 실제 Pi 입력을 연결할 때도 SimulationService와 나란히 Adapter를 추가할 수 있다.
+이제 Mock 값을 수정할 때 운영 API 코드를 건드릴 필요가 없고, 실제 Pi 입력을 연결할 때도 SimulationService와 나란히 Adapter를 추가할 수 있다.
 
 현재 남은 핵심 작업은 Mock 분리가 아니라 실제 Pi schema와 ID mapping을 확정하고 `PiServerStateAdapter`를 연결하는 것이다.

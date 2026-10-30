@@ -1,6 +1,6 @@
 # Raspberry Pi LoRa 수신 환경 구축 가이드
 
-> 다른 Pi에서 STM1의 LoRa 프레임을 받아보려는 팀원용.
+> Raspberry Pi에서 STM1의 LoRa 프레임을 수신·검증하기 위한 설정 가이드.
 > 기준 기기: 안민철 Pi (`amc`, Debian 11 Bullseye, 커널 6.1.21-v8+, aarch64)
 > 규격은 `docs/LORA_PAYLOAD_V1_1_FOR_PI.md` 참고.
 

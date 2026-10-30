@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 이 Raspberry Pi를 Jenkins SSH build agent로 쓸 수 있게 최초 1회 세팅한다.
-# 새 팀원이 자기 Pi를 agent로 등록하기 전에, 그 Pi에서 직접 실행해야 한다.
+# 새로운 Pi를 agent로 등록하기 전에, 해당 Pi에서 직접 실행해야 한다.
 #
 # 사용법:
 #   chmod +x tools/setup_jenkins_agent.sh

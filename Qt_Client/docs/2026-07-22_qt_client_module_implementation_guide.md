@@ -2,9 +2,9 @@
 
 > 작성 기준: 2026-07-22
 > 대상 저장소: `Qt_Client`
-> 기준 브랜치: `taejun/rtsp-performance-reconnect`
+> 기준 브랜치: `feat/rtsp-performance-reconnect`
 > 기준 커밋: `bed00ae`
-> 대상 독자: 이 코드를 처음 보는 팀원, 리뷰어, Raspberry Pi 서버 연동 담당자
+> 대상 독자: 클라이언트 및 Raspberry Pi 서버 연동 개발자
 
 ## 1. 문서 목적
 
@@ -728,7 +728,7 @@ config/parking_map_layout.local.json 존재 + parsing 성공
 ```
 
 - `parking_map_layout.local.json`: 사용자 PC 전용, Git 제외
-- `parking_map_layout.example.json`: 팀 공유 예시
+- `parking_map_layout.example.json`: 기본 예시
 
 ---
 
@@ -1066,7 +1066,7 @@ bell style + badge + popup
 | `src/simulation/parkingsimulationservice.cpp` | `runSampleMessages()` | 샘플 문자열을 parser에 전달 |
 | `src/pages/debugpage.cpp` | 생성자 | Mock/Debug 버튼과 기본 입력 예시 |
 | `src/models/parkingzonelayout.cpp` | `defaultParkingZoneLayout()` | Demo용 32 zone 배치 |
-| `config/parking_map_layout.example.json` | 전체 | 팀 공유 Demo 레이아웃 |
+| `config/parking_map_layout.example.json` | 전체 | 기본 Demo 레이아웃 |
 
 ## 17.2 실제 동작 코드가 들어 있는 파일과 함수
 
@@ -1259,7 +1259,7 @@ client_config.ini
 
 ---
 
-## 21. 새 팀원이 기능을 수정할 때 찾을 위치
+## 21. 기능을 수정할 때 찾을 위치
 
 | 수정 목적 | 먼저 볼 파일/함수 |
 |---|---|

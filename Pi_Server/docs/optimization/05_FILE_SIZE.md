@@ -2,7 +2,7 @@
 
 - 작성일: 2026-08-28
 - 대상: Raspberry Pi 4 Model B (8GB) / aarch64 / kernel 6.18.39 / OpenCV 4.10.0
-- **옛 방식**: [`d41e2f09`](https://github.com/VEDA-4th-Team5/Pi_Server/tree/d41e2f094377ec75760122cba430d1f10ea1b339) — `[Feat] 홀센서 트리거 세션 연결 초안 작성 (EVDA-134)`
+- **옛 방식**: `d41e2f09` — `[Feat] 홀센서 트리거 세션 연결 초안 작성 (EVDA-134)`
 - **현재 방식**: `demo_0826` / `79c5de4`
 - 원본 측정: [`data/file_size_old_vs_new.txt`](data/file_size_old_vs_new.txt), [`data/file_size_cpu_bench.txt`](data/file_size_cpu_bench.txt)
 - 벤치마크 소스(재현용): [`data/file_size_cpu_bench.cpp`](data/file_size_cpu_bench.cpp), [`data/file_size_cpu_stages.cpp`](data/file_size_cpu_stages.cpp) — 재현 절차는 `data/file_size_cpu_bench.txt` [C]항

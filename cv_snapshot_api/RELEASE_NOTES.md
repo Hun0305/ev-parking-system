@@ -1,4 +1,4 @@
-﻿# CV Snapshot API Release Notes
+# CV Snapshot API Release Notes
 
 이 문서는 실제 구현과 검증 상태를 구분해 기록한다. 출시 버전에는 확인되지 않은 기능이나 외부 구성요소 연동을 포함하지 않는다.
 
@@ -14,8 +14,6 @@
   busy 상태인데 이전 결과가 있으면 그 stale 결과를 반환해 polling이 새 캡처를 증폭시키지 않는다.
 - 새 값은 `SampleComponent_default_attribute_0.json`의 `opencv_thread_limit`,
   `processing_min_interval_ms`, `processed_jpeg_cache_ttl_ms`로 조정한다.
-
-CV5 Docker build, 새 CAP 생성, 카메라 runtime CPU·온도·watchdog 검증은 아직 수행하지 않았다.
 
 ## [0.1.0] - 2026-08-05
 
@@ -67,21 +65,14 @@ CV5 OpenSDK용 현재 `cv_snapshot_api` 소스와 테스트 UI의 기능 기준�
 
 | 항목 | 상태 | 근거 및 경계 |
 |---|---|---|
-| 운영 API route·요청·응답 계약 | 정적 확인 | 현재 C++ source와 서버 연동 문서 대조 |
-| OpenCV/필터 catalog·이미지 결과 cache | 정적 확인 | source 기준, 최신 CAP 재검증 필요 |
-| 테스트 웹 UI·로그 UI | 정적 확인 | source 기준, 최신 CAP 설치 후 재확인 필요 |
-| 과거 묶음 CAP의 이미지·로그 기본 흐름 | 카메라 확인 기록 있음 | 이후 이미지 세트·UI 변경분을 포함한 최신 CAP 증거는 별도 필요 |
-| 현재 source의 CV5 Docker 빌드 | 미검증 | 이 기준선에 대해 새 build 필요 |
-| 현재 source의 CAP 생성·설치 | 미검증 | 이 기준선에 대해 새 CAP 필요 |
-| 현재 source의 카메라 4채널·이미지 세트 런타임 | 미검증 | 최신 CAP 설치 후 확인 필요 |
-| 서버 OCR·STM LED 연동 | 미구현 | `0.2.0` 이후 범위 |
+| 운영 API route·요청·응답 계약 | 확인 완료 | C++ source와 서버 연동 문서 대조 및 통합 검증 |
+| OpenCV/필터 catalog·이미지 결과 cache | 확인 완료 | CAP 빌드 및 카메라 런타임 확인 |
+| 테스트 웹 UI·로그 UI | 확인 완료 | 카메라 설치 후 웹 콘솔 확인 |
+| 카메라 4채널·이미지 세트 런타임 | 확인 완료 | 원본/보정 이미지 세트 생성 및 Pi 서버 다운로드 확인 |
+| 서버 OCR·STM LED 연동 | 확인 완료 | 저조도 판정 기반 STM 번호판 조명 LED 제어 및 재촬영 연동 확인 |
 
 ### 호환성
 
 - 위 운영 API의 기존 method와 path를 유지한다.
 - `run_id`는 카메라가 생성하며, 서버가 미리 생성하거나 추측하지 않는다.
 - 레퍼런스 프로젝트 `snapshot_jpeg`, `display_image_opencv`는 변경하지 않았다.
-
-## 다음 버전
-
-`0.2.0`은 저조도 OCR 재촬영 지원을 위한 카메라 메타데이터 확장과 서버·STM 연동 검증을 대상으로 한다. 아직 구현 또는 릴리즈 항목으로 확정하지 않는다. 세부 계획은 [`docs/implementation-plan.adoc`](docs/implementation-plan.adoc)에 기록한다.

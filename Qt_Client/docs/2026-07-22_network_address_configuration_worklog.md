@@ -61,7 +61,7 @@ Pi server
 
 ### `config/client_config.ini`
 
-- 특정 Pi 주소로 자동 접속하던 team-shared 기본값을 제거했다.
+- 특정 Pi 주소로 자동 접속하던 고정 기본값을 제거했다.
 - 기본 상태는 `enabled=false`, `base_url=`이다.
 - 사용자가 Settings에서 전체 URL을 저장하면 Git 제외 대상인 `client_config.local.ini`에 `enabled=true`와 주소가 기록된다.
 - 따라서 저장소를 새 PC에서 실행해도 과거 Pi 주소로 자동 접속하지 않는다.

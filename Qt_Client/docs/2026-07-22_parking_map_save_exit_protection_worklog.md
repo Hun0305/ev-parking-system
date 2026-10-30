@@ -1,7 +1,7 @@
 # 2026-07-22 Parking Map 저장 알림·종료 보호 작업일지
 
 > 작업 저장소: `Qt_Client`
-> 작업 브랜치: `taejun/rtsp-performance-reconnect`
+> 작업 브랜치: `feat/rtsp-performance-reconnect`
 > 작업 범위: Parking Map 레이아웃 저장 결과 표시, 변경 상태 추적, 종료 보호, 회귀 테스트
 
 ---

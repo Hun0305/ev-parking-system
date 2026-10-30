@@ -48,7 +48,7 @@ low_quality_presence_v1/
    └─ README.md
 ```
 
-## 서버팀에 전달할 핵심 문장
+## 서버 연동 시 핵심 사항
 
 > 저화질 입력에서 아이콘/번호판 존재 판단을 우선하는 CV 로직을 Pi_Server에 shadow mode로 연동한다. 동일 raw JPEG를 입력으로 받아 `PRESENT/ABSENT/REVIEW`, raw quality, candidate, 평면화 상태, guard reason, 처리 시간을 기록한다. OCR은 기존 baseline crop 경로를 유지하고, 이 결과는 WiseAI 점유 판정이나 최종 EV/NON_EV를 대체하지 않는다. 신규 RGB/IR human-GT 독립 holdout 검증 전까지 운영 판정에는 반영하지 않는다.
 

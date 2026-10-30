@@ -4,7 +4,7 @@ Qt Client가 Raspberry Pi 서버에서 주차 상태와 증거 이미지를 조�
 
 ## 클라이언트 설정
 
-팀 공용 기본값은 `config/client_config.ini`, 개인 PC 오버라이드는 Git에서 제외되는 `config/client_config.local.ini`에 둡니다.
+기본 설정값은 `config/client_config.ini`, 개인 PC 오버라이드는 Git에서 제외되는 `config/client_config.local.ini`에 둡니다.
 
 ```ini
 [api]

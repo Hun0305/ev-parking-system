@@ -16,7 +16,7 @@ Qt Client가 외부 문자열 메시지 형식에 직접 의존하던 범위를 
 
 ```text
 base: develop / 400728f
-branch: taejun/qt-client-event-refactor
+branch: feat/qt-client-event-refactor
 ```
 
 기능과 문서를 한 번에 묶지 않고 다음 의미 단위로 커밋을 분리했다.

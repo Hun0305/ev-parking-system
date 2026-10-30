@@ -18,8 +18,8 @@ Qt Widgets와 QML 기반 스마트 주차 관제 클라이언트입니다.
 
 ## 실시간 MQTT 알림
 
-Pi가 발행하는 화재 후보 알림을 구독합니다. Qt Mqtt 애드온 모듈은 팀 계정 저장소에
-없어서 설치할 수 없었고, 대신 `QTcpSocket` 위에 MQTT 3.1.1을 직접 구현했습니다
+Pi가 발행하는 화재 후보 알림을 구독합니다. 별도의 외부 Qt Mqtt 애드온 모듈에
+의존하지 않도록 `QTcpSocket` 위에 MQTT 3.1.1을 직접 구현했습니다
 (`src/services/mqttserviceclient.cpp`) — 구독 전용(발행·인증·TLS 없음)이라
 추가 모듈 설치 없이 기본 Qt(Network 모듈)만으로 항상 빌드됩니다.
 
@@ -33,7 +33,7 @@ port=1883
 topics=parking/fire/#
 ~~~
 
-개인 테스트용 Pi를 쓸 때는 공용 파일 대신 `config/client_config.local.ini`의
+로컬 테스트용 Pi를 쓸 때는 기본 파일 대신 `config/client_config.local.ini`의
 `[mqtt] host`를 덮어씁니다. 이 파일은 Git에서 제외됩니다.
 
 화재 후보는 주차면을 `FIRE_SUSPECTED`(진한 빨강)로 표시하고 배너를 띄웁니다.
@@ -41,9 +41,9 @@ topics=parking/fire/#
 해제 신호가 오면 화재 직전 상태로 되돌립니다.
 페이로드 규약은 Pi_Server의 `docs/MQTT_PROTOCOL_PROPOSAL.md`에 있습니다.
 
-## 팀 공유 API 설정
+## 기본 API 설정
 
-config/client_config.ini은 Git으로 추적되는 팀 공용 설정입니다.
+`config/client_config.ini`은 Git으로 추적되는 기본 설정입니다.
 
 ~~~ini
 [api]

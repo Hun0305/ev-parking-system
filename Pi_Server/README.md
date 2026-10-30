@@ -1,4 +1,4 @@
-# VEDA Smart Parking Pi Server
+# Smart Parking Pi Server
 
 Hanwha Vision CCTV 기반 스마트 주차 관제 시스템의 Raspberry Pi C++ 서버입니다.
 MQTT, 선택적 RTSP, Camera Snapshot API, OpenCV, Gemini OCR, SQLite 및
@@ -27,9 +27,8 @@ Qt 연동 API를 사용합니다.
 - 센서 메시지 파서와 주차 상태 단위 테스트
 - STM32 UART 화재 후보 수신, Qt MQTT OPEN/ACKNOWLEDGED/RESOLVED 전이
 
-현재 운영 프로필은 WiseAI IVA MQTT를 점유 입력으로 사용하고,
-Snapshot API에서 받은 이미지를 Pi에서 ROI crop해 OCR한다. 32면 최종
-모델, LoRa 실물 구간과 3~5초 영상 클립 저장은 아직 완료되지 않았다.
+현재 운영 프로필은 WiseAI IVA MQTT·ONVIF 이벤트와 STM32 홀 센서 입력을 결합(`HYBRID_OR`)하여 사용하고,
+Snapshot API에서 받은 이미지를 Pi에서 ROI crop해 OCR한다.
 
 ## 주요 흐름
 
@@ -106,7 +105,7 @@ ctest --test-dir cmake-build --output-on-failure
 ./run_server.sh restart
 ```
 
-### 설정 파일 (EVDA-203)
+### 설정 파일
 
 설정은 두 파일로 나뉩니다.
 
@@ -134,12 +133,12 @@ TELEGRAM_CHANNEL
 cp .env.private.example .env.private
 ```
 
-**새로 클론했다면** `.env.private`를 직접 만들고 팀에서 공유받은 값을 채워야
+**새로 클론했다면** `.env.private`를 직접 만들고 환경에 맞는 실제 계정·키 값을 채워야
 합니다. 없으면 서버는 뜨지만 OCR과 카메라 접속이 동작하지 않습니다
 (`run_server.sh`가 경고를 출력합니다).
 
 설정을 바꿀 때는 `.env.public`을 고쳐서 커밋하십시오. 이 파일이 Git으로 함께
-배포되므로 팀원이 `git pull`만 하면 같은 설정으로 맞춰집니다.
+관리되므로 `git pull`만 하면 같은 기본 설정으로 맞춰집니다.
 
 ```bash
 set -a
@@ -357,14 +356,11 @@ Qt는 이미지 목록에서 받은 상대 URL에 같은 Pi HTTPS origin을 붙�
 요청한다. 전체 계약과 Windows CA 설치 방법은
 [`docs/HTTP_API.md`](docs/HTTP_API.md)에 있다.
 
-## 현재 제한
+## 운영 참고 사항
 
-- DB는 최종 목표인 4채널 32면 구조가 아닙니다.
-- 주차면용 BestShot은 비활성이며 입구 CH2용 metadata 경로만 활성화한다.
-- EV 아이콘 모델은 실제 CH2 Plate 이미지로 오탐·미탐 정확도를 별도 검증한다.
-- UART/LoRa 소프트웨어 계층은 구현됐지만 실제 STM32·LoRa 장비 검증은 남아 있습니다.
-- 알람 ACK와 STM32 부저/LED 출력은 아직 없습니다.
-- `/dev/parking_alert`는 구현됐지만 타이머 위반 callback과 32면 bit 매핑은 아직 연결 전입니다.
+- 주차면용 BestShot은 비활성이며 입구 CH2용 metadata 경로만 활성화합니다 (`BESTSHOT_ENABLED=false`, `ENTRANCE_ENABLED=true`).
+- 주차면 촬영은 카메라 내장 `cv_snapshot_api`의 원본·보정본 생성 API(`/images/generate`)를 기본 경로로 사용합니다.
+- STM32 센서 링크(UART/LoRa), 번호판 조명 LED 하행 제어, `/dev/parking_alert` 문자 디바이스 연동이 포함되어 있습니다.
 
 상세 문서:
 

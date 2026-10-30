@@ -3,7 +3,7 @@
 ## Workspace
 
 - Target Raspberry Pi project root: `/home/B777/Pi_Server`
-- Source repository: `VEDA-4th-Team5/Pi_Server`
+- Source repository: `Pi_Server`
 - Current branch: `feat/EVDA-212-entry-decision-logic-fix`
 - Current HEAD: `f827d0d [Fix] IVA 영역 점유 판정 및 촬영 경로 정리 (EVDA-212)`
 - Previous feature commit: `f6e3625 [Feat] IVA·홀센서 하이브리드 입출차 판정 구현 (EVDA-212)`

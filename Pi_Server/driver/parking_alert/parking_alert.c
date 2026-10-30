@@ -313,7 +313,7 @@ static void __exit parking_alert_exit(void)
 module_init(parking_alert_init);
 module_exit(parking_alert_exit);
 
-MODULE_AUTHOR("VEDA Team 5");
+MODULE_AUTHOR("Smart Parking System");
 MODULE_DESCRIPTION("Smart parking alert character device");
 MODULE_LICENSE("GPL");
 MODULE_VERSION("1.0.0");

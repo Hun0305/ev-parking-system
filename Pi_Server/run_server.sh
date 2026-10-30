@@ -58,7 +58,7 @@ mkdir -p "$ROOT_DIR/data/logs" "$ROOT_DIR/data/db"
 
 if [[ ! -f "$PI_SERVER_ENV_DIR/.env.private" ]]; then
     echo "WARNING: .env.private 없음 - Gemini 키와 카메라 주소/계정이 빈 값입니다." >&2
-    echo "         README.md의 '실행' 절을 보고 팀에서 공유받은 값으로 만드세요." >&2
+    echo "         README.md의 '실행' 절을 보고 환경에 맞는 값으로 만드세요." >&2
 fi
 
 export CAPTURE_SCHED_ENABLED="${CAPTURE_SCHED_ENABLED:-true}"

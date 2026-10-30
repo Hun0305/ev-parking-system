@@ -106,7 +106,7 @@ raw_verdict = (energy >= FLAME_ENERGY_THRESHOLD /* 5.0 */)
 
 ## 4. UART 프로토콜 (EVDA-81)
 
-Raspberry Pi 팀이 이미 구현해둔 파서 형식을 그대로 채택 — 당초 계획했던 `[STX][SRC_ID][MSG_TYPE][LEN][PAYLOAD][CRC-8][ETX]` 바이너리 프레임 대신, 실제로 소비하는 쪽 포맷에 맞춤:
+Raspberry Pi 서버 파서 형식을 그대로 채택 — 당초 계획했던 `[STX][SRC_ID][MSG_TYPE][LEN][PAYLOAD][CRC-8][ETX]` 바이너리 프레임 대신, 실제로 소비하는 쪽 포맷에 맞춤:
 
 ```
 SENSOR:sensor_0N:OCCUPIED|VACANT:<seq>\r\n

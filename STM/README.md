@@ -1,9 +1,7 @@
 # STM — 주차 감지 노드 펌웨어
 
 주차장 감시 및 제어 시스템의 **STM32 펌웨어**입니다.
-주차면 점유(홀 센서)와 화재(불꽃 센서)를 감지해 LoRa 로 라즈베리파이 게이트웨이에 보고합니다.
-
-VEDA 4기 5팀 프로젝트. 관련 저장소: [Pi_Server](https://github.com/VEDA-4th-Team5/Pi_Server) · [Qt_Client](https://github.com/VEDA-4th-Team5/Qt_Client)
+주차면 점유(홀 센서)와 화재(불꽃 센서)를 감지해 LoRa 로 라즈베리파이 게이트웨이에 보고하고, 하행 명령을 받아 야간 번호판 조명 LED를 구동합니다.
 
 ---
 
@@ -34,13 +32,12 @@ VEDA 4기 5팀 프로젝트. 관련 저장소: [Pi_Server](https://github.com/VE
 ## 현재 구현
 
 - **홀 센서** — D0 오픈컬렉터 GPIO 직결(LOW = OCCUPIED), EXTI 인터럽트. 채널별 쿨다운으로 채터링 억제
-- **불꽃 센서** — DFR0076 ADC + CMSIS-DSP FFT. 1~20Hz flicker 에너지 **또는** DC 상승(delta) 하이브리드 판정, 5창 중 3 다수결 디바운스
-- **baseline 추종** — 깨끗한 창에서만 천천히 따라가 조명 변화·센서 드리프트를 흡수 (EVDA-218)
-- **LoRa 전송** — EBYTE E220-900T30D, 920MHz. 페이로드 v1.1 (프레임 version `0x02`)
+- **불꽃 센서** — DFR0076 ADC DMA 수집. DC 평균 절대 임계값(500) 및 비대칭 히스테리시스(진입 500 / 해제 200), 5창 중 3 다수결 디바운스
+- **LoRa 전송** — EBYTE E22-900T22S, 920MHz. 페이로드 v1.1 (프레임 version `0x02`)
 - **duty cycle 리미터** — 전파법 한도 내 송신 보장. 초과분은 버림
-- **하트비트** — 10초 주기, 노드별로 반 주기 어긋내 half-duplex 충돌 회피 (EVDA-46)
-- **화재 유실 대책** — DETECTED 를 같은 seq 로 2회 더 재전송 (EVDA-124)
-- **번호판 조명 LED** — 하행 명령 수신부 (EVDA-194)
+- **하트비트** — 10초 주기, 노드별로 반 주기 어긋내 half-duplex 충돌 회피
+- **화재 유실 대책** — DETECTED 를 같은 seq 로 2회 더 재전송
+- **번호판 조명 LED** — 하행 명령(`ALERT:<id>:LED:ON|OFF:<seq>`) 수신 및 구동
 
 ### 전송 포맷
 
@@ -53,7 +50,7 @@ FIRE:STM1:FLAME01:DETECTED:144:43.70
 ```
 
 `<seq>` 는 **노드 단일 카운터**입니다. 홀·화재가 같은 스트림을 씁니다.
-디바운스는 STM32 가 책임지고 Pi 는 재디바운스하지 않습니다(팀 계약).
+디바운스는 STM32 가 책임지고 Pi 는 재디바운스하지 않습니다.
 
 ---
 
@@ -112,12 +109,10 @@ STM32CubeIDE 2.2.0 으로 `STM/` 를 엽니다. GCC 툴체인, CMSIS-DSP 링크.
 
 ---
 
-## 현재 한계
+## 참고 사항
 
-- **Pi 시퀀스 가드** — 노드가 켜진 지 약 1시간 이내에 리셋되면 그 노드의 프레임이 전부 버려집니다. Pi 쪽 수정 필요 → [`docs/PI_SERVER_SEQ_GUARD_REBOOT.md`](docs/PI_SERVER_SEQ_GUARD_REBOOT.md)
-- **불꽃 판정 히스테리시스 없음** — 신호가 임계 근처에 걸리면 DETECTED/CLEARED 가 반복될 수 있습니다. 진입·해제 문턱 분리 필요
-- **태양광 환경 오탐 테스트 미완** — 실내 조건(형광등·모니터·손 흔들기)까지만 검증됨
-- **TDOA 마이크** — 미착수
+- **Pi 시퀀스 가드** — 노드가 재부팅되어 시퀀스가 초기화될 때의 수신 복구 동작은 [`docs/PI_SERVER_SEQ_GUARD_REBOOT.md`](docs/PI_SERVER_SEQ_GUARD_REBOOT.md)를 참고합니다.
+- **불꽃 판정 검증** — 실내 조건(형광등·모니터·손 흔들기) 및 점화/소화 검증 기록은 [`docs/STM1_flame_sensor_validation_2026-07-23.md`](docs/STM1_flame_sensor_validation_2026-07-23.md) 및 [`docs/OPTIMIZATION_RESULTS_2026-08-28.md`](docs/OPTIMIZATION_RESULTS_2026-08-28.md)를 참고합니다.
 
 ---
 
@@ -129,14 +124,7 @@ STM32CubeIDE 2.2.0 으로 `STM/` 를 엽니다. GCC 툴체인, CMSIS-DSP 링크.
 | [`docs/LORA_PAYLOAD_V1_1_FOR_PI.md`](docs/LORA_PAYLOAD_V1_1_FOR_PI.md) | 센서 페이로드 v1.1 규격 |
 | [`docs/LORA_RF_COMPLIANCE_KR.md`](docs/LORA_RF_COMPLIANCE_KR.md) | 920MHz 전파법 duty cycle 검토 |
 | [`docs/PI_LORA_SETUP_GUIDE.md`](docs/PI_LORA_SETUP_GUIDE.md) | Pi 쪽 LoRa 구축 가이드 |
-| [`docs/PI_SERVER_LORA_V11_PATCH.md`](docs/PI_SERVER_LORA_V11_PATCH.md) | Pi_Server v1.1 수신 대응 요청 |
-| [`docs/PI_SERVER_SEQ_GUARD_REBOOT.md`](docs/PI_SERVER_SEQ_GUARD_REBOOT.md) | Pi 시퀀스 가드 재부팅 차단 문제 |
+| [`docs/PI_SERVER_LORA_V11_PATCH.md`](docs/PI_SERVER_LORA_V11_PATCH.md) | Pi_Server v1.1 수신 대응 규격 |
+| [`docs/PI_SERVER_SEQ_GUARD_REBOOT.md`](docs/PI_SERVER_SEQ_GUARD_REBOOT.md) | Pi 시퀀스 가드 재부팅 처리 |
 | [`docs/LORA_FIXES_2026-08-06.md`](docs/LORA_FIXES_2026-08-06.md) | LoRa 송신 문제 수정 내역 |
 | [`docs/STM1_flame_sensor_validation_2026-07-23.md`](docs/STM1_flame_sensor_validation_2026-07-23.md) | 불꽃센서 실물 검증 기록 |
-
----
-
-## 브랜치
-
-`develop` 이 기본 브랜치입니다. 작업은 `feat/EVDA-000-요약` 으로 따서 PR 로 머지하고,
-커밋 메시지에 지라 이슈 키(EVDA-000)를 붙입니다.

@@ -28,7 +28,7 @@ perf report -i perf.data --stdio -n --sort=overhead,dso
 perf report -i perf.data
 ```
 
-- `perf_event_paranoid=2`였지만 프로세스 소유자 본인이라 attach는 문제없이 동작.
+- `perf_event_paranoid=2`였지만 동일 사용자 소유 프로세스라 attach는 문제없이 동작.
 - 30초 측정 동안 999Hz 기준 2,322개 샘플 수집(이론상 최대 29,970개 대비 약 7.7% CPU 사용률 — 서버는 대부분 유휴 상태에서 폴링 중).
 - 결과가 의심스러운 지점(SQLite 함수 비중)은 `sqlite3` CLI로 실제 DB(`data/db/parking.db`)에 `EXPLAIN QUERY PLAN`을 돌려 교차검증.
 

@@ -1,6 +1,6 @@
 # STM ↔ Pi LoRa 연동 규격 v1.1
 
-> 대상: Raspberry Pi 서버 / Qt 담당자
+> 대상: Raspberry Pi 서버 / Qt 클라이언트 연동
 > STM 측 구현 완료 및 실기기 검증 완료. 프레임 `version = 0x02`.
 > 관련: EVDA-46, EVDA-201 / `STM/README.md`, `docs/LORA_RF_COMPLIANCE_KR.md`
 
@@ -228,7 +228,7 @@ ALERT:HALL03:LED:ON:14      → STM2 로 (목적지 00 02 1E)
 | 화재 (DETECTED) | **5초마다** energy 갱신 |
 
 - **중복은 정상입니다.** 하트비트는 상태가 그대로여도 다시 보냅니다. 멱등 처리하십시오
-- **디바운스는 STM32가 합니다.** Pi에서 재디바운스하지 마십시오 (팀 계약)
+- **디바운스는 STM32가 합니다.** Pi에서 재디바운스하지 마십시오
 - 홀 채널이 5초 안에 여러 번 바뀌면 중간 상태는 전선에 나오지 않고 최종 상태만 옵니다 — 의도된 동작입니다(전파법 duty 예산)
 
 ---
